@@ -70,22 +70,15 @@ jobs:
         - CIBW_TEST_COMMAND_LINUX="" # TODO: enable tests
       if: type != pull_request AND (branch = master OR (tag =~ /^.*-scylla$/))
 
-    # perform a linux S390X build
-    - name: IBM-Z (s390x)
-      services: docker
-      arch: s390x
-      env:
-        - CIBW_TEST_COMMAND_LINUX="" # TODO: enable tests
-        - CIBW_BUILD="cp37* cp38*"
-      if: type != pull_request AND (branch = master OR (tag =~ /^.*-scylla$/))
-
     # perform a linux arm64 build
     - name: ARM64 (aarch64)
       services: docker
       arch: arm64
       env:
-        - CIBW_TEST_COMMAND_LINUX="" # TODO: enable tests
-        - CIBW_BUILD="cp37* cp38*"
+        - CIBW_TEST_COMMAND_LINUX=""
+        - CIBW_BUILD="cp38*"
+        - CASS_DRIVER_NO_PRE_BUILD_CHECK=true
+        - CIBW_BUILD_VERBOSITY=3
       if: type != pull_request AND (branch = master OR (tag =~ /^.*-scylla$/))
 
     # perform a linux PPC64LE build
@@ -93,8 +86,12 @@ jobs:
       services: docker
       arch: ppc64le
       env:
-        - CIBW_TEST_COMMAND_LINUX="" # TODO: enable tests
-        - CIBW_BUILD="cp37* cp38*"
+        - CIBW_BEFORE_ALL="ci/install_openssl.sh"
+        - CIBW_TEST_COMMAND_LINUX="pytest --import-mode append {project}/tests/unit -k 'not test_connection_initialization'"
+        - CIBW_BEFORE_TEST="yum install -y wget; ci/install_openssl.sh; pip install -r {project}/test-requirements.txt pytest"
+        - CIBW_BUILD="cp37* cp38* cp39*"
+        - CASS_DRIVER_NO_PRE_BUILD_CHECK=true
+        - CIBW_BUILD_VERBOSITY=3
       if: type != pull_request AND (branch = master OR (tag =~ /^.*-scylla$/))
 
     # and a mac build
