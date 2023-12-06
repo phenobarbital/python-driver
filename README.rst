@@ -1,13 +1,13 @@
 DataStax Driver for Apache Cassandra
 ====================================
 
-.. image:: https://travis-ci.org/datastax/python-driver.png?branch=master
-   :target: https://travis-ci.org/datastax/python-driver
+.. image:: https://travis-ci.com/datastax/python-driver.png?branch=master
+   :target: https://travis-ci.com/github/datastax/python-driver
 
 A modern, `feature-rich <https://github.com/datastax/python-driver#features>`_ and highly-tunable Python client library for Apache Cassandra (2.1+) and
 DataStax Enterprise (4.7+) using exclusively Cassandra's binary protocol and Cassandra Query Language v3.
 
-The driver supports Python 2.7, 3.4, 3.5, 3.6, 3.7 and 3.8.
+The driver supports Python 3.7 and 3.8.
 
 **Note:** DataStax products do not support big-endian systems.
 
@@ -22,7 +22,7 @@ Features
 * Configurable `load balancing <http://datastax.github.io/python-driver/api/cassandra/policies.html#load-balancing>`_ and `retry policies <http://datastax.github.io/python-driver/api/cassandra/policies.html#retrying-failed-operations>`_
 * `Concurrent execution utilities <http://datastax.github.io/python-driver/api/cassandra/concurrent.html>`_
 * `Object mapper <http://datastax.github.io/python-driver/object_mapper.html>`_
-* `Connecting to DataStax Apollo database (cloud) <https://docs.datastax.com/en/developer/python-driver/latest/cloud/>`_
+* `Connecting to DataStax Astra database (cloud) <https://docs.datastax.com/en/developer/python-driver/latest/cloud/>`_
 * DSE Graph execution API
 * DSE Geometric type serialization
 * DSE PlainText and GSSAPI authentication
@@ -56,6 +56,10 @@ community) is now maintained as an integral part of this package. Refer to
 Contributing
 ------------
 See `CONTRIBUTING.md <https://github.com/datastax/python-driver/blob/master/CONTRIBUTING.rst>`_.
+
+Error Handling
+--------------
+While originally written for the Java driver, users may reference the `Cassandra error handling done right blog <https://www.datastax.com/blog/cassandra-error-handling-done-right>`_ for resolving error handling scenarios with Apache Cassandra.
 
 Reporting Problems
 ------------------

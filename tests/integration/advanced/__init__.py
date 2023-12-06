@@ -12,12 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
-from six.moves.urllib.request import build_opener, Request, HTTPHandler
+from urllib.request import build_opener, Request, HTTPHandler
 import re
 import os
 import time
@@ -25,10 +22,8 @@ from os.path import expanduser
 
 from ccmlib import common
 
-from cassandra.cluster import Cluster
-
-from tests.integration import PROTOCOL_VERSION, get_server_versions, BasicKeyspaceUnitTestCase, \
-    drop_keyspace_shutdown_cluster, get_node, USE_CASS_EXTERNAL, set_default_cass_ip
+from tests.integration import get_server_versions, BasicKeyspaceUnitTestCase, \
+    drop_keyspace_shutdown_cluster, get_node, USE_CASS_EXTERNAL, TestCluster
 from tests.integration import use_singledc, use_single_node, wait_for_node_socket, CASSANDRA_IP
 
 home = expanduser('~')
@@ -97,7 +92,6 @@ def use_cluster_with_graph(num_nodes):
     when started all at once.
     """
     if USE_CASS_EXTERNAL:
-        set_default_cass_ip()
         return
 
     # Create the cluster but don't start it.
@@ -109,7 +103,7 @@ def use_cluster_with_graph(num_nodes):
     # Wait for spark master to start up
     spark_master_http = ("localhost", 7080)
     common.check_socket_listening(spark_master_http, timeout=60)
-    tmp_cluster = Cluster(protocol_version=PROTOCOL_VERSION)
+    tmp_cluster = TestCluster()
 
     # Start up remaining nodes.
     try:
@@ -137,7 +131,7 @@ class BasicGeometricUnitTestCase(BasicKeyspaceUnitTestCase):
 
     @classmethod
     def common_dse_setup(cls, rf, keyspace_creation=True):
-        cls.cluster = Cluster(protocol_version=PROTOCOL_VERSION)
+        cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
         cls.ks_name = cls.__name__.lower()
         if keyspace_creation:

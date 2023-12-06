@@ -14,7 +14,6 @@
 
 
 import sys
-import six
 from packaging.version import Version
 
 from copy import copy
@@ -22,10 +21,7 @@ from itertools import chain
 import json
 import time
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from cassandra import OperationTimedOut, ConsistencyLevel, InvalidRequest
 from cassandra.cluster import EXEC_PROFILE_GRAPH_DEFAULT, NoHostAvailable
@@ -35,8 +31,9 @@ from cassandra.util import Point
 from cassandra.graph import (SimpleGraphStatement, single_object_row_factory,
                        Result, GraphOptions, GraphProtocol, to_bigint)
 from cassandra.datastax.graph.query import _graph_options
+from cassandra.datastax.graph.types import T
 
-from tests.integration import DSE_VERSION, requiredse
+from tests.integration import DSE_VERSION, requiredse, greaterthanorequaldse68
 from tests.integration.advanced.graph import BasicGraphUnitTestCase, GraphTestConfiguration, \
     validate_classic_vertex, GraphUnitTestCase, validate_classic_edge, validate_path_result_type, \
     validate_line_edge, validate_generic_vertex_result_type, \
@@ -85,7 +82,7 @@ class BasicGraphQueryTest(BasicGraphUnitTestCase):
             res = s.execute_graph("null")
 
             for k, v in cl.items():
-                self.assertEqual(res.response_future.message.custom_payload[graph_params[k]], six.b(ConsistencyLevel.value_to_name[v]))
+                self.assertEqual(res.response_future.message.custom_payload[graph_params[k]], ConsistencyLevel.value_to_name[v].encode())
 
             # passed profile values override session defaults
             cl = {0: ConsistencyLevel.ALL, 1: ConsistencyLevel.QUORUM}
@@ -99,7 +96,7 @@ class BasicGraphQueryTest(BasicGraphUnitTestCase):
             res = s.execute_graph("null", execution_profile=tmp_profile)
 
             for k, v in cl.items():
-                self.assertEqual(res.response_future.message.custom_payload[graph_params[k]], six.b(ConsistencyLevel.value_to_name[v]))
+                self.assertEqual(res.response_future.message.custom_payload[graph_params[k]], ConsistencyLevel.value_to_name[v].encode())
         finally:
             default_profile.graph_options = default_graph_opts
 
@@ -542,6 +539,26 @@ class GenericGraphQueryTest(GraphUnitTestCase):
             self.assertEqual(len(results), 5)
         self.assertEqual(results.count(35), 2)
 
+    @greaterthanorequaldse68
+    def _test_elementMap_query(self, schema, graphson):
+        """
+        Test to validate that an elementMap can be serialized properly.
+        """
+        self.execute_graph(schema.fixtures.classic(), graphson)
+        rs = self.execute_graph('''g.V().has('name','marko').elementMap()''', graphson)
+        results_list = self.resultset_to_list(rs)
+        self.assertEqual(len(results_list), 1)
+        row = results_list[0]
+        if graphson == GraphProtocol.GRAPHSON_3_0:
+            self.assertIn(T.id, row)
+            self.assertIn(T.label, row)
+            if schema is CoreGraphSchema:
+                self.assertEqual(row[T.id], 'dseg:/person/marko')
+                self.assertEqual(row[T.label], 'person')
+        else:
+            self.assertIn('id', row)
+            self.assertIn('label', row)
+
 
 @GraphTestConfiguration.generate_tests(schema=ClassicGraphSchema)
 class ClassicGraphQueryTest(GenericGraphQueryTest):
@@ -570,7 +587,7 @@ class CoreGraphQueryWithTypeWrapperTest(GraphUnitTestCase):
         vl = VertexLabel(['tupleOf(Int, Bigint)'])
         schema.create_vertex_label(self.session, vl, execution_profile=ep)
 
-        prop_name = next(six.iterkeys(vl.non_pk_properties))
+        prop_name = next(iter(vl.non_pk_properties.keys()))
         with self.assertRaises(InvalidRequest):
             schema.add_vertex(self.session, vl, prop_name, (1, 42), execution_profile=ep)
 

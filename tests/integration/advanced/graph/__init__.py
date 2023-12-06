@@ -22,7 +22,6 @@ from decimal import Decimal
 import datetime
 
 from cassandra.util import Point, LineString, Polygon, Duration
-import six
 
 from cassandra.cluster import EXEC_PROFILE_GRAPH_DEFAULT, EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT
 from cassandra.cluster import GraphAnalyticsExecutionProfile, GraphExecutionProfile, EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT, \
@@ -160,14 +159,13 @@ class BasicGraphUnitTestCase(BasicKeyspaceUnitTestCase):
             )
         )
 
-        self.cluster = Cluster(protocol_version=PROTOCOL_VERSION,
-                               execution_profiles={
-                                   EXEC_PROFILE_GRAPH_DEFAULT: ep_graphson1,
-                                   EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT: ep_analytics,
-                                   "graphson1": ep_graphson1,
-                                   "graphson2": ep_graphson2,
-                                   "graphson3": ep_graphson3
-                               })
+        self.cluster = TestCluster(execution_profiles={
+            EXEC_PROFILE_GRAPH_DEFAULT: ep_graphson1,
+            EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT: ep_analytics,
+            "graphson1": ep_graphson1,
+            "graphson2": ep_graphson2,
+            "graphson3": ep_graphson3
+        })
 
         self.session = self.cluster.connect()
         self.ks_name = self._testMethodName.lower()
@@ -276,14 +274,13 @@ class GraphUnitTestCase(BasicKeyspaceUnitTestCase):
             )
         )
 
-        self.cluster = Cluster(protocol_version=PROTOCOL_VERSION,
-                               execution_profiles={
-                                   EXEC_PROFILE_GRAPH_DEFAULT: ep_graphson1,
-                                   EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT: ep_analytics,
-                                   "graphson1": ep_graphson1,
-                                   "graphson2": ep_graphson2,
-                                   "graphson3": ep_graphson3
-                               })
+        self.cluster = TestCluster(execution_profiles={
+            EXEC_PROFILE_GRAPH_DEFAULT: ep_graphson1,
+            EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT: ep_analytics,
+            "graphson1": ep_graphson1,
+            "graphson2": ep_graphson2,
+            "graphson3": ep_graphson3
+        })
 
         self.session = self.cluster.connect()
         self.ks_name = self._testMethodName.lower()
@@ -362,7 +359,7 @@ class BasicSharedGraphUnitTestCase(BasicKeyspaceUnitTestCase):
 
     @classmethod
     def session_setup(cls):
-        cls.cluster = Cluster(protocol_version=PROTOCOL_VERSION)
+        cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
         cls.ks_name = cls.__name__.lower()
         cls.cass_version, cls.cql_version = get_server_versions()
@@ -420,6 +417,8 @@ class ClassicGraphFixtures(GraphFixtures):
     @staticmethod
     def datatypes():
         data = {
+            "boolean1": ["Boolean()", True, None],
+            "boolean2": ["Boolean()", False, None],
             "point1": ["Point()", Point(.5, .13), GraphSON1Deserializer.deserialize_point],
              "point2": ["Point()", Point(-5, .0), GraphSON1Deserializer.deserialize_point],
 
@@ -457,14 +456,10 @@ class ClassicGraphFixtures(GraphFixtures):
             "duration1": ["Duration()", datetime.timedelta(1, 16, 0),
                           GraphSON1Deserializer.deserialize_duration],
             "duration2": ["Duration()", datetime.timedelta(days=1, seconds=16, milliseconds=15),
-                          GraphSON1Deserializer.deserialize_duration]
+                          GraphSON1Deserializer.deserialize_duration],
+            "blob3": ["Blob()", bytes(b"Hello World Again"), GraphSON1Deserializer.deserialize_blob],
+            "blob4": ["Blob()", memoryview(b"And Again Hello World"), GraphSON1Deserializer.deserialize_blob]
             }
-
-        if six.PY2:
-            data["blob2"] = ["Blob()",  buffer(b"Hello World"), GraphSON1Deserializer.deserialize_blob]
-        else:
-            data["blob3"] = ["Blob()", bytes(b"Hello World Again"), GraphSON1Deserializer.deserialize_blob]
-            data["blob4"] = ["Blob()", memoryview(b"And Again Hello World"), GraphSON1Deserializer.deserialize_blob]
 
         if DSE_VERSION >= Version("5.1"):
             data["time1"] = ["Time()", datetime.time(12, 6, 12, 444), GraphSON1Deserializer.deserialize_time]
@@ -965,7 +960,7 @@ class GraphTestConfiguration(object):
         """Generate tests for a graph configuration"""
         def decorator(klass):
             if DSE_VERSION:
-                predicate = inspect.ismethod if six.PY2 else inspect.isfunction
+                predicate = inspect.isfunction
                 for name, func in inspect.getmembers(klass, predicate=predicate):
                     if not name.startswith('_test'):
                         continue
@@ -984,7 +979,7 @@ class GraphTestConfiguration(object):
         """Generate schema tests for a graph configuration"""
         def decorator(klass):
             if DSE_VERSION:
-                predicate = inspect.ismethod if six.PY2 else inspect.isfunction
+                predicate = inspect.isfunction
                 for name, func in inspect.getmembers(klass, predicate=predicate):
                     if not name.startswith('_test'):
                         continue
@@ -1026,7 +1021,7 @@ class VertexLabel(object):
 
     @property
     def non_pk_properties(self):
-        return {p: v for p, v in six.iteritems(self.properties) if p != 'pkid'}
+        return {p: v for p, v in self.properties.items() if p != 'pkid'}
 
 
 class GraphSchema(object):
@@ -1134,7 +1129,7 @@ class ClassicGraphSchema(GraphSchema):
     @classmethod
     def create_vertex_label(cls, session, vertex_label, execution_profile=EXEC_PROFILE_GRAPH_DEFAULT):
         statements = ["schema.propertyKey('pkid').Int().ifNotExists().create();"]
-        for k, v in six.iteritems(vertex_label.non_pk_properties):
+        for k, v in vertex_label.non_pk_properties.items():
             typ = cls.sanitize_type(v)
             statements.append("schema.propertyKey('{name}').{type}.create();".format(
                 name=k, type=typ
@@ -1142,7 +1137,7 @@ class ClassicGraphSchema(GraphSchema):
 
         statements.append("schema.vertexLabel('{label}').partitionKey('pkid').properties(".format(
             label=vertex_label.label))
-        property_names = [name for name in six.iterkeys(vertex_label.non_pk_properties)]
+        property_names = [name for name in vertex_label.non_pk_properties.keys()]
         statements.append(", ".join(["'{}'".format(p) for p in property_names]))
         statements.append(").create();")
 
@@ -1189,7 +1184,7 @@ class CoreGraphSchema(GraphSchema):
         statements = ["schema.vertexLabel('{label}').partitionBy('pkid', Int)".format(
             label=vertex_label.label)]
 
-        for name, typ in six.iteritems(vertex_label.non_pk_properties):
+        for name, typ in vertex_label.non_pk_properties.items():
             typ = cls.sanitize_type(typ)
             statements.append(".property('{name}', {type})".format(name=name, type=typ))
         statements.append(".create();")

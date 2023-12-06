@@ -13,16 +13,13 @@
 # limitations under the License.
 
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from itertools import cycle
 from mock import Mock
 import time
 import threading
-from six.moves.queue import PriorityQueue
+from queue import PriorityQueue
 import sys
 import platform
 

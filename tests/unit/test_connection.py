@@ -11,14 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from mock import Mock, ANY, call, patch
-import six
-from six import BytesIO
+from io import BytesIO
 import time
 from threading import Lock
 
@@ -44,14 +40,14 @@ class ConnectionTest(unittest.TestCase):
 
     def make_header_prefix(self, message_class, version=Connection.protocol_version, stream_id=0):
         if Connection.protocol_version < 3:
-            return six.binary_type().join(map(uint8_pack, [
+            return bytes().join(map(uint8_pack, [
                 0xff & (HEADER_DIRECTION_TO_CLIENT | version),
                 0,  # flags (compression)
                 stream_id,
                 message_class.opcode  # opcode
             ]))
         else:
-            return six.binary_type().join(map(uint8_pack, [
+            return bytes().join(map(uint8_pack, [
                 0xff & (HEADER_DIRECTION_TO_CLIENT | version),
                 0,  # flags (compression)
                 0,  # MSB for v3+ stream
@@ -100,7 +96,7 @@ class ConnectionTest(unittest.TestCase):
         header = self.make_header_prefix(SupportedMessage, version=0x7f)
         options = self.make_options_body()
         message = self.make_msg(header, options)
-        c._iobuf = BytesIO()
+        c._iobuf._io_buffer = BytesIO()
         c._iobuf.write(message)
         c.process_io_buffer()
 
@@ -117,7 +113,7 @@ class ConnectionTest(unittest.TestCase):
         # read in a SupportedMessage response
         header = self.make_header_prefix(SupportedMessage)
         message = header + int32_pack(-13)
-        c._iobuf = BytesIO()
+        c._iobuf._io_buffer = BytesIO()
         c._iobuf.write(message)
         c.process_io_buffer()
 
@@ -395,7 +391,7 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         connection.defunct.assert_has_calls([call(ANY)] * get_holders.call_count)
         exc = connection.defunct.call_args_list[0][0][0]
         self.assertIsInstance(exc, ConnectionException)
-        self.assertRegexpMatches(exc.args[0], r'^Received unexpected response to OptionsMessage.*')
+        self.assertRegex(exc.args[0], r'^Received unexpected response to OptionsMessage.*')
         holder.return_connection.assert_has_calls(
             [call(connection)] * get_holders.call_count)
 

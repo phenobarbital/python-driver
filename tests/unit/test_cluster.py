@@ -11,13 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 import logging
-import six
 
 from mock import patch, Mock
 
@@ -89,6 +85,17 @@ class ExceptionTypeTest(unittest.TestCase):
 
 
 class ClusterTest(unittest.TestCase):
+
+    def test_tuple_for_contact_points(self):
+        cluster = Cluster(contact_points=[('localhost', 9045), ('127.0.0.2', 9046), '127.0.0.3'], port=9999)
+        for cp in cluster.endpoints_resolved:
+            if cp.address in ('::1', '127.0.0.1'):
+                self.assertEqual(cp.port, 9045)
+            elif cp.address == '127.0.0.2':
+                self.assertEqual(cp.port, 9046)
+            else:
+                self.assertEqual(cp.address, '127.0.0.3')
+                self.assertEqual(cp.port, 9999)
 
     def test_invalid_contact_point_types(self):
         with self.assertRaises(ValueError):
@@ -198,6 +205,8 @@ class ProtocolVersionTests(unittest.TestCase):
         lower = ProtocolVersion.get_lower_supported(ProtocolVersion.DSE_V2)
         self.assertEqual(ProtocolVersion.DSE_V1, lower)
         lower = ProtocolVersion.get_lower_supported(ProtocolVersion.DSE_V1)
+        self.assertEqual(ProtocolVersion.V5,lower)
+        lower = ProtocolVersion.get_lower_supported(ProtocolVersion.V5)
         self.assertEqual(ProtocolVersion.V4,lower)
         lower = ProtocolVersion.get_lower_supported(ProtocolVersion.V4)
         self.assertEqual(ProtocolVersion.V3,lower)
@@ -276,7 +285,7 @@ class ExecutionProfileTest(unittest.TestCase):
         rf = session.execute_async("query", execution_profile='non-default')
         self._verify_response_future_profile(rf, non_default_profile)
 
-        for name, ep in six.iteritems(cluster.profile_manager.profiles):
+        for name, ep in cluster.profile_manager.profiles.items():
             self.assertEqual(ep, session.get_execution_profile(name))
 
         # invalid ep

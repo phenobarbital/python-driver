@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest # noqa
+import unittest
 
 from mock import Mock
 
@@ -175,7 +172,7 @@ class MessageTest(unittest.TestCase):
         keyspace_message = QueryMessage('a', consistency_level=3, keyspace='ks')
         io = Mock(name='io')
 
-        with self.assertRaisesRegexp(UnsupportedOperation, 'Keyspaces.*set'):
+        with self.assertRaisesRegex(UnsupportedOperation, 'Keyspaces.*set'):
             keyspace_message.send_body(io, protocol_version=4)
         io.assert_not_called()
 

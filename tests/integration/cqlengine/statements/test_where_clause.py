@@ -11,12 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
-import six
 from cassandra.cqlengine.operators import EqualsOperator
 from cassandra.cqlengine.statements import StatementException, WhereClause
 
@@ -33,7 +29,7 @@ class TestWhereClause(unittest.TestCase):
         wc = WhereClause('a', EqualsOperator(), 'c')
         wc.set_context_id(5)
 
-        self.assertEqual('"a" = %(5)s', six.text_type(wc), six.text_type(wc))
+        self.assertEqual('"a" = %(5)s', str(wc), str(wc))
         self.assertEqual('"a" = %(5)s', str(wc), type(wc))
 
     def test_equality_method(self):

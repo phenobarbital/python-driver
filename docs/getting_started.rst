@@ -3,15 +3,41 @@ Getting Started
 
 First, make sure you have the driver properly :doc:`installed <installation>`.
 
-Connecting to Cassandra
+Connecting to a Cluster
 -----------------------
 Before we can start executing any queries against a Cassandra cluster we need to setup
 an instance of :class:`~.Cluster`. As the name suggests, you will typically have one
 instance of :class:`~.Cluster` for each Cassandra cluster you want to interact
 with.
 
-The simplest way to create a :class:`~.Cluster` is like this:
 First, make sure you have the Cassandra driver properly :doc:`installed <installation>`.
+
+Connecting to Astra
++++++++++++++++++++
+
+If you are a DataStax `Astra <https://www.datastax.com/products/datastax-astra>`_ user,
+here is how to connect to your cluster:
+
+1. Download the secure connect bundle from your Astra account.
+2. Connect to your cluster with
+
+.. code-block:: python
+
+    from cassandra.cluster import Cluster
+    from cassandra.auth import PlainTextAuthProvider
+
+    cloud_config = {
+        'secure_connect_bundle': '/path/to/secure-connect-dbname.zip'
+    }
+    auth_provider = PlainTextAuthProvider(username='user', password='pass')
+    cluster = Cluster(cloud=cloud_config, auth_provider=auth_provider)
+    session = cluster.connect()
+
+See `Astra <https://docs.datastax.com/en/astra/aws/doc/index.html>`_ and :doc:`cloud` for more details.
+
+Connecting to Cassandra
++++++++++++++++++++++++
+The simplest way to create a :class:`~.Cluster` is like this:
 
 .. code-block:: python
 
@@ -52,6 +78,8 @@ To establish connections and begin executing queries we need a
     cluster = Cluster()
     session = cluster.connect()
 
+Session Keyspace
+----------------
 The :meth:`~.Cluster.connect()` method takes an optional ``keyspace`` argument
 which sets the default keyspace for all queries made through that :class:`~.Session`:
 
@@ -59,7 +87,6 @@ which sets the default keyspace for all queries made through that :class:`~.Sess
 
     cluster = Cluster()
     session = cluster.connect('mykeyspace')
-
 
 You can always change a Session's keyspace using :meth:`~.Session.set_keyspace` or
 by executing a ``USE <keyspace>`` query:
@@ -70,6 +97,8 @@ by executing a ``USE <keyspace>`` query:
     # or you can do this instead
     session.execute('USE users')
 
+Execution Profiles
+------------------
 Profiles are passed in by ``execution_profiles`` dict.
 
 In this case we can construct the base ``ExecutionProfile`` passing all attributes:
@@ -113,7 +142,7 @@ way to execute a query is to use :meth:`~.Session.execute()`:
 
     rows = session.execute('SELECT name, age, email FROM users')
     for user_row in rows:
-        print user_row.name, user_row.age, user_row.email
+        print(user_row.name, user_row.age, user_row.email)
 
 This will transparently pick a Cassandra node to execute the query against
 and handle any retries that are necessary if the operation fails.
@@ -129,19 +158,19 @@ examples are equivalent:
 
     rows = session.execute('SELECT name, age, email FROM users')
     for row in rows:
-        print row.name, row.age, row.email
+        print(row.name, row.age, row.email)
 
 .. code-block:: python
 
     rows = session.execute('SELECT name, age, email FROM users')
     for (name, age, email) in rows:
-        print name, age, email
+        print(name, age, email)
 
 .. code-block:: python
 
     rows = session.execute('SELECT name, age, email FROM users')
     for row in rows:
-        print row[0], row[1], row[2]
+        print(row[0], row[1], row[2])
 
 If you prefer another result format, such as a ``dict`` per row, you
 can change the :attr:`~.Session.row_factory` attribute.
@@ -329,7 +358,7 @@ For example:
     try:
         rows = future.result()
         user = rows[0]
-        print user.name, user.age
+        print(user.name, user.age)
     except ReadTimeout:
         log.exception("Query timed out:")
 
@@ -346,7 +375,7 @@ This works well for executing many queries concurrently:
     # wait for them to complete and use the results
     for future in futures:
         rows = future.result()
-        print rows[0].name
+        print(rows[0].name)
 
 Alternatively, instead of calling :meth:`~.ResponseFuture.result()`,
 you can attach callback and errback functions through the

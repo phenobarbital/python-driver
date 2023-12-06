@@ -1,4 +1,5 @@
-# Copyright DataStax, Inc.
+# -*- coding: utf-8 -*-
+# # Copyright DataStax, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,9 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import six
+from cassandra.auth import PlainTextAuthenticator
 
-if six.PY2:
-    from collections import Mapping
-elif six.PY3:
-    from collections.abc import Mapping
+import unittest
+
+
+class TestPlainTextAuthenticator(unittest.TestCase):
+
+    def test_evaluate_challenge_with_unicode_data(self):
+        authenticator = PlainTextAuthenticator("johnӁ", "doeӁ")
+        self.assertEqual(
+            authenticator.evaluate_challenge(b'PLAIN-START'),
+            "\x00johnӁ\x00doeӁ".encode('utf-8')
+        )

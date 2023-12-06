@@ -24,16 +24,24 @@ import weakref
 import sys
 import ssl
 
-from six.moves import range
 
 try:
     from weakref import WeakSet
 except ImportError:
     from cassandra.util import WeakSet  # noqa
 
-import asyncore
+from cassandra import DependencyException
+try:
+    import asyncore
+except ModuleNotFoundError:
+    raise DependencyException(
+        "Unable to import asyncore module.  Note that this module has been removed in Python 3.12 "
+        "so when using the driver with this version (or anything newer) you will need to use one of the "
+        "other event loop implementations."
+    )
 
 from cassandra.connection import Connection, ConnectionShutdown, NONBLOCKING, Timer, TimerManager
+
 
 log = logging.getLogger(__name__)
 
@@ -247,12 +255,21 @@ class AsyncoreLoop(object):
                 try:
                     self._loop_dispatcher.loop(self.timer_resolution)
                     self._timers.service_timeouts()
-                except Exception:
-                    log.debug("Asyncore event loop stopped unexepectedly", exc_info=True)
+                except Exception as exc:
+                    self._maybe_log_debug("Asyncore event loop stopped unexpectedly", exc_info=exc)
                     break
             self._started = False
 
-        log.debug("Asyncore event loop ended")
+        self._maybe_log_debug("Asyncore event loop ended")
+
+    def _maybe_log_debug(self, *args, **kwargs):
+        try:
+            log.debug(*args, **kwargs)
+        except Exception:
+            # TODO: Remove when Python 2 support is removed
+            # PYTHON-1266. If our logger has disappeared, there's nothing we
+            # can do, so just log nothing.
+            pass
 
     def add_timer(self, timer):
         self._timers.add_timer(timer)

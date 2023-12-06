@@ -12,17 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 import struct
 import math
 from cassandra.cqltypes import lookup_casstype
 from cassandra.protocol import ProtocolVersion
 from cassandra.cqltypes import PointType, LineStringType, PolygonType, WKBGeometryType
-from cassandra.util import Point, LineString, Polygon, _LinearRing, Distance
+from cassandra.util import Point, LineString, Polygon, _LinearRing, Distance, _HAS_GEOMET
 
 wkb_be = 0
 wkb_le = 1
@@ -104,7 +101,7 @@ class GeoTypes(unittest.TestCase):
             # specifically use assertFalse(eq) to make sure we're using the geo __eq__ operator
             self.assertFalse(geo == object())
 
-
+@unittest.skipUnless(_HAS_GEOMET, "Skip wkt geometry tests when geomet is not installed")
 class WKTTest(unittest.TestCase):
 
     def test_line_parse(self):

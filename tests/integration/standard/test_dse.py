@@ -16,16 +16,12 @@ import os
 
 from packaging.version import Version
 
-from cassandra.cluster import Cluster
 from tests import notwindows
 from tests.unit.cython.utils import notcython
 from tests.integration import (execute_until_pass,
-                               execute_with_long_wait_retry, use_cluster)
+                               execute_with_long_wait_retry, use_cluster, TestCluster)
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 
 CCM_IS_DSE = (os.environ.get('CCM_IS_DSE', None) == 'true')
@@ -60,8 +56,7 @@ class DseCCMClusterTest(unittest.TestCase):
         )
         use_cluster(cluster_name=cluster_name, nodes=[3], dse_options={})
 
-        cluster = Cluster(
-            allow_beta_protocol_version=(dse_version >= Version('6.7.0')))
+        cluster = TestCluster()
         session = cluster.connect()
         result = execute_until_pass(
             session,

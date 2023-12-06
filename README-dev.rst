@@ -176,7 +176,7 @@ Use tee to capture logs and see them on your terminal::
 
 Testing Multiple Python Versions
 --------------------------------
-If you want to test all of python 2.7, 3.4, 3.5, 3.6, 3.7, and pypy, use tox (this is what
+If you want to test all of python 2.7, 3.5, 3.6, 3.7, and pypy, use tox (this is what
 TravisCI runs)::
 
     tox
@@ -241,11 +241,10 @@ Adding a New Python Runtime Support
 * Add the new python version to our jenkins image:
   https://github.com/riptano/openstack-jenkins-drivers/
 
-* Add the new python version in job-creator:
-  https://github.com/riptano/job-creator/
+* Add the new python version in the Jenkinsfile and TravisCI configs as appropriate
 
 * Run the tests and ensure they all pass
   * also test all event loops
 
 * Update the wheels building repo to support that version:
-  https://github.com/riptano/python-dse-driver-wheels
+  https://github.com/datastax/python-driver-wheels

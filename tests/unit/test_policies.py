@@ -12,22 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from itertools import islice, cycle
 from mock import Mock, patch, call
 from random import randint
-import six
-from six.moves._thread import LockType
+from _thread import LockType
 import sys
 import struct
 from threading import Thread
 
 from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster
+from cassandra.connection import DefaultEndPoint
 from cassandra.metadata import Metadata
 from cassandra.policies import (RoundRobinPolicy, WhiteListRoundRobinPolicy, DCAwareRoundRobinPolicy,
                                 TokenAwarePolicy, SimpleConvictionPolicy,
@@ -37,10 +34,7 @@ from cassandra.policies import (RoundRobinPolicy, WhiteListRoundRobinPolicy, DCA
                                 LoadBalancingPolicy, ConvictionPolicy, ReconnectionPolicy, FallthroughRetryPolicy,
                                 IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy)
 from cassandra.pool import Host
-from cassandra.connection import DefaultEndPoint
 from cassandra.query import Statement
-
-from six.moves import xrange
 
 
 class LoadBalancingPolicyTest(unittest.TestCase):
@@ -78,7 +72,7 @@ class RoundRobinPolicyTest(unittest.TestCase):
         hosts = [0, 1, 2, 3]
         policy = RoundRobinPolicy()
         policy.populate(None, hosts)
-        for i in xrange(20):
+        for i in range(20):
             qplan = list(policy.make_query_plan())
             self.assertEqual(sorted(qplan), hosts)
 
@@ -124,17 +118,17 @@ class RoundRobinPolicyTest(unittest.TestCase):
 
         def check_query_plan():
             try:
-                for i in xrange(100):
+                for i in range(100):
                     list(policy.make_query_plan())
             except Exception as exc:
                 errors.append(exc)
 
         def host_up():
-            for i in xrange(1000):
+            for i in range(1000):
                 policy.on_up(randint(0, 99))
 
         def host_down():
-            for i in xrange(1000):
+            for i in range(1000):
                 policy.on_down(randint(0, 99))
 
         threads = []
@@ -145,7 +139,7 @@ class RoundRobinPolicyTest(unittest.TestCase):
 
         # make the GIL switch after every instruction, maximizing
         # the chance of race conditions
-        check = six.PY2 or '__pypy__' in sys.builtin_module_names
+        check = '__pypy__' in sys.builtin_module_names
         if check:
             original_interval = sys.getcheckinterval()
         else:
@@ -1298,10 +1292,13 @@ class HostFilterPolicyInitTest(unittest.TestCase):
         ))
 
     def test_immutable_predicate(self):
-        expected_message_regex = "can't set attribute"
+        if sys.version_info >= (3, 11):
+            expected_message_regex = "has no setter"
+        else:
+            expected_message_regex = "can't set attribute"
         hfp = HostFilterPolicy(child_policy=Mock(name='child_policy'),
                                predicate=Mock(name='predicate'))
-        with self.assertRaisesRegexp(AttributeError, expected_message_regex):
+        with self.assertRaisesRegex(AttributeError, expected_message_regex):
             hfp.predicate = object()
 
 
@@ -1499,4 +1496,3 @@ class HostFilterPolicyQueryPlanTest(unittest.TestCase):
         # Only the filtered replicas should be allowed
         self.assertEqual(set(query_plan), {Host(DefaultEndPoint("127.0.0.1"), SimpleConvictionPolicy),
                                            Host(DefaultEndPoint("127.0.0.4"), SimpleConvictionPolicy)})
-

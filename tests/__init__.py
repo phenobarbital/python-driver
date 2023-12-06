@@ -12,16 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 import logging
 import sys
 import socket
 import platform
 import os
 from concurrent.futures import ThreadPoolExecutor
+
+from cassandra import DependencyException
 
 log = logging.getLogger()
 log.setLevel('DEBUG')
@@ -35,9 +34,12 @@ if not log.handlers:
 def is_eventlet_monkey_patched():
     if 'eventlet.patcher' not in sys.modules:
         return False
-    import eventlet.patcher
-    return eventlet.patcher.is_monkey_patched('socket')
-
+    try:
+        import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched('socket')
+    # Yet another case related to PYTHON-1364
+    except AttributeError:
+        return False
 
 def is_gevent_monkey_patched():
     if 'gevent.monkey' not in sys.modules:
@@ -89,17 +91,18 @@ elif "twisted" in EVENT_LOOP_MANAGER:
 elif "asyncio" in EVENT_LOOP_MANAGER:
     from cassandra.io.asyncioreactor import AsyncioConnection
     connection_class = AsyncioConnection
-
 else:
+    log.debug("Using default event loop (libev)")
     try:
         from cassandra.io.libevreactor import LibevConnection
         connection_class = LibevConnection
-    except ImportError as e:
+    except DependencyException as e:
         log.debug('Could not import LibevConnection, '
                   'using connection_class=None; '
                   'failed with error:\n {}'.format(
                       repr(e)
                   ))
+        log.debug("Will attempt to set connection class at cluster initialization")
         connection_class = None
 
 
@@ -109,3 +112,4 @@ def is_windows():
 
 notwindows = unittest.skipUnless(not is_windows(), "This test is not adequate for windows")
 notpypy = unittest.skipUnless(not platform.python_implementation() == 'PyPy', "This tests is not suitable for pypy")
+notasyncio = unittest.skipUnless(not EVENT_LOOP_MANAGER == 'asyncio', "This tests is not suitable for EVENT_LOOP_MANAGER=asyncio")

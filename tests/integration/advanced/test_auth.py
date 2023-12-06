@@ -11,10 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 import logging
 import os
 import subprocess
@@ -26,11 +23,11 @@ from packaging.version import Version
 
 from cassandra.auth import (DSEGSSAPIAuthProvider, DSEPlainTextAuthProvider,
                       SaslAuthProvider, TransitionalModePlainTextAuthProvider)
-from cassandra.cluster import EXEC_PROFILE_GRAPH_DEFAULT, Cluster, NoHostAvailable
+from cassandra.cluster import EXEC_PROFILE_GRAPH_DEFAULT, NoHostAvailable
 from cassandra.protocol import Unauthorized
 from cassandra.query import SimpleStatement
 from tests.integration import (get_cluster, greaterthanorequaldse51,
-                               remove_cluster, requiredse, DSE_VERSION)
+                               remove_cluster, requiredse, DSE_VERSION, TestCluster)
 from tests.integration.advanced import ADS_HOME, use_single_node_with_graph
 from tests.integration.advanced.graph import reset_graph, ClassicGraphFixtures
 
@@ -50,16 +47,17 @@ def teardown_module():
 
 def wait_role_manager_setup_then_execute(session, statements):
     for s in statements:
-        e = None
+        exc = None
         for attempt in range(3):
             try:
                 session.execute(s)
                 break
             except Exception as e:
+                exc = e
                 time.sleep(5)
         else:  # if we didn't reach `break`
-            if e is not None:
-                raise e
+            if exc is not None:
+                raise exc
 
 
 @attr('long')
@@ -157,7 +155,7 @@ class BasicDseAuthTest(unittest.TestCase):
         Runs a simple system query with the auth_provided specified.
         """
         os.environ['KRB5_CONFIG'] = self.krb_conf
-        self.cluster = Cluster(auth_provider=auth_provider)
+        self.cluster = TestCluster(auth_provider=auth_provider)
         self.session = self.cluster.connect()
         query = query if query else "SELECT * FROM system.local"
         statement = SimpleStatement(query)
@@ -320,7 +318,7 @@ class BasicDseAuthTest(unittest.TestCase):
         os.environ['KRB5_CONFIG'] = self.krb_conf
         self.refresh_kerberos_tickets(self.cassandra_keytab, "cassandra@DATASTAX.COM", self.krb_conf)
         auth_provider = DSEGSSAPIAuthProvider(service='dse', qops=["auth"], principal='cassandra@DATASTAX.COM')
-        cluster = Cluster(auth_provider=auth_provider)
+        cluster = TestCluster(auth_provider=auth_provider)
         session = cluster.connect()
 
         session.execute("REVOKE PROXY.LOGIN ON ROLE '{0}' FROM '{1}'".format('charlie@DATASTAX.COM', 'bob@DATASTAX.COM'))
@@ -338,7 +336,7 @@ class BasicDseAuthTest(unittest.TestCase):
         os.environ['KRB5_CONFIG'] = self.krb_conf
         self.refresh_kerberos_tickets(self.cassandra_keytab, "cassandra@DATASTAX.COM", self.krb_conf)
         auth_provider = DSEGSSAPIAuthProvider(service='dse', qops=["auth"], principal='cassandra@DATASTAX.COM')
-        cluster = Cluster(auth_provider=auth_provider)
+        cluster = TestCluster(auth_provider=auth_provider)
         session = cluster.connect()
 
         stmts = [
@@ -403,7 +401,7 @@ class BaseDseProxyAuthTest(unittest.TestCase):
         # Create users and test keyspace
         self.user_role = 'user1'
         self.server_role = 'server'
-        self.root_cluster = Cluster(auth_provider=DSEPlainTextAuthProvider('cassandra', 'cassandra'))
+        self.root_cluster = TestCluster(auth_provider=DSEPlainTextAuthProvider('cassandra', 'cassandra'))
         self.root_session = self.root_cluster.connect()
 
         stmts = [
@@ -469,7 +467,7 @@ class DseProxyAuthTest(BaseDseProxyAuthTest):
         return sasl_options
 
     def connect_and_query(self, auth_provider, execute_as=None, query="SELECT * FROM testproxy.testproxy"):
-        self.cluster = Cluster(auth_provider=auth_provider)
+        self.cluster = TestCluster(auth_provider=auth_provider)
         self.session = self.cluster.connect()
         rs = self.session.execute(query, execute_as=execute_as)
         return rs

@@ -11,16 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from binascii import unhexlify
 import logging
 from mock import Mock
 import os
-import six
 import timeit
 
 import cassandra
@@ -34,12 +30,40 @@ from cassandra.metadata import (Murmur3Token, MD5Token,
                                 UserType, KeyspaceMetadata, get_schema_parser,
                                 _UnknownStrategy, ColumnMetadata, TableMetadata,
                                 IndexMetadata, Function, Aggregate,
-                                Metadata, TokenMap)
+                                Metadata, TokenMap, ReplicationFactor)
 from cassandra.policies import SimpleConvictionPolicy
 from cassandra.pool import Host
 
 
 log = logging.getLogger(__name__)
+
+
+class ReplicationFactorTest(unittest.TestCase):
+
+    def test_replication_factor_parsing(self):
+        rf = ReplicationFactor.create('3')
+        self.assertEqual(rf.all_replicas, 3)
+        self.assertEqual(rf.full_replicas, 3)
+        self.assertEqual(rf.transient_replicas, None)
+        self.assertEqual(str(rf), '3')
+
+        rf = ReplicationFactor.create('3/1')
+        self.assertEqual(rf.all_replicas, 3)
+        self.assertEqual(rf.full_replicas, 2)
+        self.assertEqual(rf.transient_replicas, 1)
+        self.assertEqual(str(rf), '3/1')
+
+        self.assertRaises(ValueError, ReplicationFactor.create, '3/')
+        self.assertRaises(ValueError, ReplicationFactor.create, 'a/1')
+        self.assertRaises(ValueError, ReplicationFactor.create, 'a')
+        self.assertRaises(ValueError, ReplicationFactor.create, '3/a')
+
+    def test_replication_factor_equality(self):
+        self.assertEqual(ReplicationFactor.create('3/1'), ReplicationFactor.create('3/1'))
+        self.assertEqual(ReplicationFactor.create('3'), ReplicationFactor.create('3'))
+        self.assertNotEqual(ReplicationFactor.create('3'), ReplicationFactor.create('3/1'))
+        self.assertNotEqual(ReplicationFactor.create('3'), ReplicationFactor.create('3/1'))
+
 
 
 class StrategiesTest(unittest.TestCase):
@@ -84,6 +108,93 @@ class StrategiesTest(unittest.TestCase):
 
         self.assertRaises(NotImplementedError, rs.make_token_replica_map, None, None)
         self.assertRaises(NotImplementedError, rs.export_for_schema)
+
+    def test_simple_replication_type_parsing(self):
+        """ Test equality between passing numeric and string replication factor for simple strategy """
+        rs = ReplicationStrategy()
+
+        simple_int = rs.create('SimpleStrategy', {'replication_factor': 3})
+        simple_str = rs.create('SimpleStrategy', {'replication_factor': '3'})
+
+        self.assertEqual(simple_int.export_for_schema(), simple_str.export_for_schema())
+        self.assertEqual(simple_int, simple_str)
+
+        # make token replica map
+        ring = [MD5Token(0), MD5Token(1), MD5Token(2)]
+        hosts = [Host('dc1.{}'.format(host), SimpleConvictionPolicy) for host in range(3)]
+        token_to_host = dict(zip(ring, hosts))
+        self.assertEqual(
+            simple_int.make_token_replica_map(token_to_host, ring),
+            simple_str.make_token_replica_map(token_to_host, ring)
+        )
+
+    def test_transient_replication_parsing(self):
+        """ Test that we can PARSE a transient replication factor for SimpleStrategy """
+        rs = ReplicationStrategy()
+
+        simple_transient = rs.create('SimpleStrategy', {'replication_factor': '3/1'})
+        self.assertEqual(simple_transient.replication_factor_info, ReplicationFactor(3, 1))
+        self.assertEqual(simple_transient.replication_factor, 2)
+        self.assertIn("'replication_factor': '3/1'", simple_transient.export_for_schema())
+
+        simple_str = rs.create('SimpleStrategy', {'replication_factor': '2'})
+        self.assertNotEqual(simple_transient, simple_str)
+
+        # make token replica map
+        ring = [MD5Token(0), MD5Token(1), MD5Token(2)]
+        hosts = [Host('dc1.{}'.format(host), SimpleConvictionPolicy) for host in range(3)]
+        token_to_host = dict(zip(ring, hosts))
+        self.assertEqual(
+            simple_transient.make_token_replica_map(token_to_host, ring),
+            simple_str.make_token_replica_map(token_to_host, ring)
+        )
+
+    def test_nts_replication_parsing(self):
+        """ Test equality between passing numeric and string replication factor for NTS """
+        rs = ReplicationStrategy()
+
+        nts_int = rs.create('NetworkTopologyStrategy', {'dc1': 3, 'dc2': 5})
+        nts_str = rs.create('NetworkTopologyStrategy', {'dc1': '3', 'dc2': '5'})
+
+        self.assertEqual(nts_int.dc_replication_factors['dc1'], 3)
+        self.assertEqual(nts_str.dc_replication_factors['dc1'], 3)
+        self.assertEqual(nts_int.dc_replication_factors_info['dc1'], ReplicationFactor(3))
+        self.assertEqual(nts_str.dc_replication_factors_info['dc1'], ReplicationFactor(3))
+
+        self.assertEqual(nts_int.export_for_schema(), nts_str.export_for_schema())
+        self.assertEqual(nts_int, nts_str)
+
+        # make token replica map
+        ring = [MD5Token(0), MD5Token(1), MD5Token(2)]
+        hosts = [Host('dc1.{}'.format(host), SimpleConvictionPolicy) for host in range(3)]
+        token_to_host = dict(zip(ring, hosts))
+        self.assertEqual(
+            nts_int.make_token_replica_map(token_to_host, ring),
+            nts_str.make_token_replica_map(token_to_host, ring)
+        )
+
+    def test_nts_transient_parsing(self):
+        """ Test that we can PARSE a transient replication factor for NTS """
+        rs = ReplicationStrategy()
+
+        nts_transient = rs.create('NetworkTopologyStrategy', {'dc1': '3/1', 'dc2': '5/1'})
+        self.assertEqual(nts_transient.dc_replication_factors_info['dc1'], ReplicationFactor(3, 1))
+        self.assertEqual(nts_transient.dc_replication_factors_info['dc2'], ReplicationFactor(5, 1))
+        self.assertEqual(nts_transient.dc_replication_factors['dc1'], 2)
+        self.assertEqual(nts_transient.dc_replication_factors['dc2'], 4)
+        self.assertIn("'dc1': '3/1', 'dc2': '5/1'", nts_transient.export_for_schema())
+
+        nts_str = rs.create('NetworkTopologyStrategy', {'dc1': '3', 'dc2': '5'})
+        self.assertNotEqual(nts_transient, nts_str)
+
+        # make token replica map
+        ring = [MD5Token(0), MD5Token(1), MD5Token(2)]
+        hosts = [Host('dc1.{}'.format(host), SimpleConvictionPolicy) for host in range(3)]
+        token_to_host = dict(zip(ring, hosts))
+        self.assertEqual(
+            nts_transient.make_token_replica_map(token_to_host, ring),
+            nts_str.make_token_replica_map(token_to_host, ring)
+        )
 
     def test_nts_make_token_replica_map(self):
         token_to_host_owner = {}
@@ -373,11 +484,11 @@ class Murmur3TokensTest(unittest.TestCase):
             raise unittest.SkipTest('The cmurmur3 extension is not available')
 
     def _verify_hash(self, fn):
-        self.assertEqual(fn(six.b('123')), -7468325962851647638)
+        self.assertEqual(fn(b'123'), -7468325962851647638)
         self.assertEqual(fn(b'\x00\xff\x10\xfa\x99' * 10), 5837342703291459765)
         self.assertEqual(fn(b'\xfe' * 8), -8927430733708461935)
         self.assertEqual(fn(b'\x10' * 8), 1446172840243228796)
-        self.assertEqual(fn(six.b(str(cassandra.metadata.MAX_LONG))), 7162290910810015547)
+        self.assertEqual(fn(str(cassandra.metadata.MAX_LONG).encode()), 7162290910810015547)
 
 
 class MD5TokensTest(unittest.TestCase):
@@ -392,28 +503,28 @@ class MD5TokensTest(unittest.TestCase):
 class BytesTokensTest(unittest.TestCase):
 
     def test_bytes_tokens(self):
-        bytes_token = BytesToken(unhexlify(six.b('01')))
-        self.assertEqual(bytes_token.value, six.b('\x01'))
+        bytes_token = BytesToken(unhexlify(b'01'))
+        self.assertEqual(bytes_token.value, b'\x01')
         self.assertEqual(str(bytes_token), "<BytesToken: %s>" % bytes_token.value)
         self.assertEqual(bytes_token.hash_fn('123'), '123')
         self.assertEqual(bytes_token.hash_fn(123), 123)
         self.assertEqual(bytes_token.hash_fn(str(cassandra.metadata.MAX_LONG)), str(cassandra.metadata.MAX_LONG))
 
     def test_from_string(self):
-        from_unicode = BytesToken.from_string(six.text_type('0123456789abcdef'))
-        from_bin = BytesToken.from_string(six.b('0123456789abcdef'))
+        from_unicode = BytesToken.from_string('0123456789abcdef')
+        from_bin = BytesToken.from_string(b'0123456789abcdef')
         self.assertEqual(from_unicode, from_bin)
-        self.assertIsInstance(from_unicode.value, six.binary_type)
-        self.assertIsInstance(from_bin.value, six.binary_type)
+        self.assertIsInstance(from_unicode.value, bytes)
+        self.assertIsInstance(from_bin.value, bytes)
 
     def test_comparison(self):
-        tok = BytesToken.from_string(six.text_type('0123456789abcdef'))
+        tok = BytesToken.from_string('0123456789abcdef')
         token_high_order = uint16_unpack(tok.value[0:2])
         self.assertLess(BytesToken(uint16_pack(token_high_order - 1)), tok)
         self.assertGreater(BytesToken(uint16_pack(token_high_order + 1)), tok)
 
     def test_comparison_unicode(self):
-        value = six.b('\'_-()"\xc2\xac')
+        value = b'\'_-()"\xc2\xac'
         t0 = BytesToken(value)
         t1 = BytesToken.from_string('00')
         self.assertGreater(t0, t1)
@@ -530,7 +641,7 @@ class UnicodeIdentifiersTests(unittest.TestCase):
     Looking for encoding errors like PYTHON-447
     """
 
-    name = six.text_type(b'\'_-()"\xc2\xac'.decode('utf-8'))
+    name = b'\'_-()"\xc2\xac'.decode('utf-8')
 
     def test_keyspace_name(self):
         km = KeyspaceMetadata(self.name, False, 'SimpleStrategy', {'replication_factor': 1})

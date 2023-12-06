@@ -12,13 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest
+import unittest
 
 import os, sys, traceback, logging, ssl, time, math, uuid
-from cassandra.cluster import Cluster, NoHostAvailable
+from cassandra.cluster import NoHostAvailable
 from cassandra.connection import DefaultEndPoint
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -26,7 +23,7 @@ from cassandra.query import SimpleStatement
 from OpenSSL import SSL, crypto
 
 from tests.integration import (
-    PROTOCOL_VERSION, get_cluster, remove_cluster, use_single_node, start_cluster_wait_for_up, EVENT_LOOP_MANAGER,
+    get_cluster, remove_cluster, use_single_node, start_cluster_wait_for_up, EVENT_LOOP_MANAGER, TestCluster
 )
 
 if not hasattr(ssl, 'match_hostname'):
@@ -54,11 +51,11 @@ DRIVER_CERTFILE_BAD = os.path.abspath("tests/integration/long/ssl/client_bad.key
 USES_PYOPENSSL = "twisted" in EVENT_LOOP_MANAGER or "eventlet" in EVENT_LOOP_MANAGER
 if "twisted" in EVENT_LOOP_MANAGER:
     import OpenSSL
-    ssl_version = OpenSSL.SSL.TLSv1_METHOD
+    ssl_version = OpenSSL.SSL.TLSv1_2_METHOD
     verify_certs = {'cert_reqs': SSL.VERIFY_PEER,
                     'check_hostname': True}
 else:
-    ssl_version = ssl.PROTOCOL_TLSv1
+    ssl_version = ssl.PROTOCOL_TLS
     verify_certs = {'cert_reqs': ssl.CERT_REQUIRED,
                     'check_hostname': True}
 
@@ -103,9 +100,8 @@ def validate_ssl_options(**kwargs):
             if tries > 5:
                 raise RuntimeError("Failed to connect to SSL cluster after 5 attempts")
             try:
-                cluster = Cluster(
+                cluster = TestCluster(
                     contact_points=[DefaultEndPoint(hostname)],
-                    protocol_version=PROTOCOL_VERSION,
                     ssl_options=ssl_options,
                     ssl_context=ssl_context
                 )
@@ -185,7 +181,7 @@ class SSLConnectionTests(unittest.TestCase):
             if tries > 5:
                 raise RuntimeError("Failed to connect to SSL cluster after 5 attempts")
             try:
-                cluster = Cluster(protocol_version=PROTOCOL_VERSION, ssl_options=ssl_options)
+                cluster = TestCluster(ssl_options=ssl_options)
                 session = cluster.connect(wait_for_all_pools=True)
                 break
             except Exception:
@@ -291,8 +287,8 @@ class SSLConnectionAuthTests(unittest.TestCase):
         @test_category connection:ssl
         """
 
-        cluster = Cluster(protocol_version=PROTOCOL_VERSION, ssl_options={'ca_certs': CLIENT_CA_CERTS,
-                                                                          'ssl_version': ssl_version})
+        cluster = TestCluster(ssl_options={'ca_certs': CLIENT_CA_CERTS,
+                                           'ssl_version': ssl_version})
 
         with self.assertRaises(NoHostAvailable) as _:
             cluster.connect()
@@ -320,10 +316,11 @@ class SSLConnectionAuthTests(unittest.TestCase):
             # I don't set the bad certfile for pyopenssl because it hangs
             ssl_options['certfile'] = DRIVER_CERTFILE_BAD
 
-        cluster = Cluster(protocol_version=PROTOCOL_VERSION,
-                          ssl_options={'ca_certs': CLIENT_CA_CERTS,
-                                       'ssl_version': ssl_version,
-                                       'keyfile': DRIVER_KEYFILE})
+        cluster = TestCluster(
+            ssl_options={'ca_certs': CLIENT_CA_CERTS,
+                         'ssl_version': ssl_version,
+                         'keyfile': DRIVER_KEYFILE}
+        )
 
         with self.assertRaises(NoHostAvailable) as _:
             cluster.connect()
@@ -364,7 +361,7 @@ class SSLSocketErrorTests(unittest.TestCase):
         """
         ssl_options = {'ca_certs': CLIENT_CA_CERTS,
                        'ssl_version': ssl_version}
-        cluster = Cluster(protocol_version=PROTOCOL_VERSION, ssl_options=ssl_options)
+        cluster = TestCluster(ssl_options=ssl_options)
         session = cluster.connect(wait_for_all_pools=True)
         try:
             session.execute('drop keyspace ssl_error_test')
@@ -404,7 +401,7 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
         @test_category connection:ssl
         """
         if USES_PYOPENSSL:
-            ssl_context = SSL.Context(SSL.TLSv1_METHOD)
+            ssl_context = SSL.Context(SSL.TLSv1_2_METHOD)
             ssl_context.load_verify_locations(CLIENT_CA_CERTS)
         else:
             ssl_context = ssl.SSLContext(ssl_version)
@@ -428,7 +425,7 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
         ssl_options = {}
 
         if USES_PYOPENSSL:
-            ssl_context = SSL.Context(SSL.TLSv1_METHOD)
+            ssl_context = SSL.Context(SSL.TLSv1_2_METHOD)
             ssl_context.use_certificate_file(abs_driver_certfile)
             with open(abs_driver_keyfile) as keyfile:
                 key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b'cassandra')
@@ -449,7 +446,7 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
         """
         ssl_options = {}
         if USES_PYOPENSSL:
-            ssl_context = SSL.Context(SSL.TLSv1_METHOD)
+            ssl_context = SSL.Context(SSL.TLSv1_2_METHOD)
             ssl_context.use_certificate_file(DRIVER_CERTFILE)
             with open(DRIVER_KEYFILE_ENCRYPTED) as keyfile:
                 key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b'cassandra')
@@ -472,7 +469,7 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
     def test_cannot_connect_ssl_context_with_invalid_hostname(self):
         ssl_options = {}
         if USES_PYOPENSSL:
-            ssl_context = SSL.Context(SSL.TLSv1_METHOD)
+            ssl_context = SSL.Context(SSL.TLSv1_2_METHOD)
             ssl_context.use_certificate_file(DRIVER_CERTFILE)
             with open(DRIVER_KEYFILE_ENCRYPTED) as keyfile:
                 key = crypto.load_privatekey(crypto.FILETYPE_PEM, keyfile.read(), b"cassandra")

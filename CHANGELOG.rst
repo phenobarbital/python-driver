@@ -1,3 +1,123 @@
+3.28.0
+======
+June 5, 2023
+
+Features
+--------
+* Add support for vector type (PYTHON-1352)
+* Cryptography module is now an optional dependency (PYTHON-1351)
+
+Bug Fixes
+---------
+* Store IV along with encrypted text when using column-level encryption (PYTHON-1350)
+* Create session-specific protocol handlers to contain session-specific CLE policies (PYTHON-1356)
+
+Others
+------
+* Use Cython for smoke builds (PYTHON-1343)
+* Don't fail when inserting UDTs with prepared queries with some missing fields (PR 1151)
+* Convert print statement to function in docs (PR 1157)
+* Update comment for retry policy (DOC-3278)
+* Added error handling blog reference (DOC-2813)
+
+3.27.0
+======
+May 1, 2023
+
+Features
+--------
+* Add support for client-side encryption (PYTHON-1341)
+
+3.26.0
+======
+March 13, 2023
+
+Features
+--------
+* Add support for execution profiles in execute_concurrent (PR 1122)
+
+Bug Fixes
+---------
+* Handle empty non-final result pages (PR 1110)
+* Do not re-use stream IDs for in-flight requests (PR 1114)
+* Asyncore race condition cause logging exception on shutdown (PYTHON-1266)
+
+Others
+------
+* Fix deprecation warning in query tracing (PR 1103)
+* Remove mutable default values from some tests (PR 1116)
+* Remove dependency on unittest2 (PYTHON-1289)
+* Fix deprecation warnings for asyncio.coroutine annotation in asyncioreactor (PYTHON-1290)
+* Fix typos in source files (PR 1126)
+* HostFilterPolicyInitTest fix for Python 3.11 (PR 1131)
+* Fix for DontPrepareOnIgnoredHostsTest (PYTHON-1287)
+* tests.integration.simulacron.test_connection failures (PYTHON-1304)
+* tests.integration.standard.test_single_interface.py appears to be failing for C* 4.0 (PYTHON-1329)
+* Authentication tests appear to be failing fraudulently (PYTHON-1328)
+* PreparedStatementTests.test_fail_if_different_query_id_on_reprepare() failing unexpectedly (PTYHON-1327)
+* Refactor deprecated unittest aliases for Python 3.11 compatibility (PR 1112)
+
+Deprecations
+------------
+* This release removes support for Python 2.7.x as well as Python 3.5.x and 3.6.x
+
+3.25.0
+======
+March 18, 2021
+
+Features
+--------
+* Ensure the driver can connect when invalid peer hosts are in system.peers (PYTHON-1260)
+* Implement protocol v5 checksumming (PYTHON-1258)
+* Fix the default cqlengine connection mechanism to work with Astra (PYTHON-1265)
+
+Bug Fixes
+---------
+* Asyncore race condition cause logging exception on shutdown (PYTHON-1266)
+* Update list of reserved keywords (PYTHON-1269)
+
+Others
+------
+* Drop Python 3.4 support (PYTHON-1220)
+* Update security documentation and examples to use PROTOCOL_TLS (PYTHON-1264)
+
+3.24.0
+======
+June 18, 2020
+
+Features
+--------
+* Make geomet an optional dependency at runtime (PYTHON-1237)
+* Add use_default_tempdir cloud config options (PYTHON-1245)
+* Tcp flow control for libevreactor (PYTHON-1248)
+
+Bug Fixes
+---------
+* Unable to connect to a cloud cluster using Ubuntu 20.04 (PYTHON-1238)
+* PlainTextAuthProvider fails with unicode chars and Python3 (PYTHON-1241)
+* [GRAPH] Graph execution profiles consistency level are not set to LOCAL_QUORUM with a cloud cluster (PYTHON-1240)
+* [GRAPH] Can't write data in a Boolean field using the Fluent API (PYTHON-1239)
+* [GRAPH] Fix elementMap() result deserialization (PYTHON-1233)
+
+Others
+------
+* Bump geomet dependency version to 0.2 (PYTHON-1243)
+* Bump gremlinpython dependency version to 3.4.6 (PYTHON-1212)
+* Improve fluent graph documentation for core graphs (PYTHON-1244)
+
+3.23.0
+======
+April 6, 2020
+
+Features
+--------
+* Transient Replication Support (PYTHON-1207)
+* Support system.peers_v2 and port discovery for C* 4.0 (PYTHON-700)
+
+Bug Fixes
+---------
+* Asyncore logging exception on shutdown (PYTHON-1228)
+
 3.22.0
 ======
 February 26, 2020
@@ -146,7 +266,7 @@ October 28, 2019
 
 Features
 --------
-* DataStax Apollo Support (PYTHON-1074)
+* DataStax Astra Support (PYTHON-1074)
 * Use 4.0 schema parser in 4 alpha and snapshot builds (PYTHON-1158)
 
 Bug Fixes

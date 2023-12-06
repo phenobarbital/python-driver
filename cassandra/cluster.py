@@ -21,16 +21,17 @@ from __future__ import absolute_import
 import atexit
 from binascii import hexlify
 from collections import defaultdict
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as wait_futures
 from copy import copy
-from functools import partial, wraps
+from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
 import json
 import logging
 from warnings import warn
 from random import random
-import six
-from six.moves import filter, range, queue as Queue
+import re
+import queue
 import socket
 import sys
 import time
@@ -43,12 +44,12 @@ from weakref import WeakValueDictionary
 from cassandra import (ConsistencyLevel, AuthenticationFailed,
                        OperationTimedOut, UnsupportedOperation,
                        SchemaTargetType, DriverException, ProtocolVersion,
-                       UnresolvableContactPoints)
+                       UnresolvableContactPoints, DependencyException)
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
 from cassandra.connection import (ConnectionException, ConnectionShutdown,
                                   ConnectionHeartbeat, ProtocolVersionUnsupported,
                                   EndPoint, DefaultEndPoint, DefaultEndPointFactory,
-                                  ContinuousPagingState, SniEndPointFactory)
+                                  ContinuousPagingState, SniEndPointFactory, ConnectionBusy)
 from cassandra.cqltypes import UserType
 from cassandra.encoder import Encoder
 from cassandra.protocol import (QueryMessage, ResultMessage,
@@ -63,8 +64,8 @@ from cassandra.protocol import (QueryMessage, ResultMessage,
                                 BatchMessage, RESULT_KIND_PREPARED,
                                 RESULT_KIND_SET_KEYSPACE, RESULT_KIND_ROWS,
                                 RESULT_KIND_SCHEMA_CHANGE, ProtocolHandler,
-                                RESULT_KIND_VOID)
-from cassandra.metadata import Metadata, protect_name, murmur3
+                                RESULT_KIND_VOID, ProtocolException)
+from cassandra.metadata import Metadata, protect_name, murmur3, _NodeInfo
 from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, SimpleConvictionPolicy,
                                 ExponentialReconnectionPolicy, HostDistance,
                                 RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
@@ -79,7 +80,6 @@ from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              HostTargetingStatement)
 from cassandra.marshal import int64_pack
 from cassandra.timestamps import MonotonicTimestampGenerator
-from cassandra.compat import Mapping
 from cassandra.util import _resolve_contact_points_to_string_map, Version
 
 from cassandra.datastax.insights.reporter import MonitorReporter
@@ -99,7 +99,11 @@ except ImportError:
 
 try:
     from cassandra.io.eventletreactor import EventletConnection
-except ImportError:
+# PYTHON-1364
+#
+# At the moment eventlet initialization is chucking AttributeErrors due to it's dependence on pyOpenSSL
+# and some changes in Python 3.12 which have some knock-on effects there.
+except (ImportError, AttributeError):
     EventletConnection = None
 
 try:
@@ -107,35 +111,65 @@ try:
 except ImportError:
     from cassandra.util import WeakSet  # NOQA
 
-if six.PY3:
-    long = int
-
-def _is_eventlet_monkey_patched():
-    if 'eventlet.patcher' not in sys.modules:
-        return False
-    import eventlet.patcher
-    return eventlet.patcher.is_monkey_patched('socket')
-
-
 def _is_gevent_monkey_patched():
     if 'gevent.monkey' not in sys.modules:
         return False
     import gevent.socket
     return socket.socket is gevent.socket.socket
 
+def _try_gevent_import():
+    if _is_gevent_monkey_patched():
+        from cassandra.io.geventreactor import GeventConnection
+        return (GeventConnection,None)
+    else:
+        return (None,None)
 
-# default to gevent when we are monkey patched with gevent, eventlet when
-# monkey patched with eventlet, otherwise if libev is available, use that as
-# the default because it's fastest. Otherwise, use asyncore.
-if _is_gevent_monkey_patched():
-    from cassandra.io.geventreactor import GeventConnection as DefaultConnection
-elif _is_eventlet_monkey_patched():
-    from cassandra.io.eventletreactor import EventletConnection as DefaultConnection
-else:
+def _is_eventlet_monkey_patched():
+    if 'eventlet.patcher' not in sys.modules:
+        return False
     try:
-        from cassandra.io.libevreactor import LibevConnection as DefaultConnection  # NOQA
-    except ImportError:
-        from cassandra.io.asyncorereactor import AsyncoreConnection as DefaultConnection  # NOQA
+        import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched('socket')
+    # Another case related to PYTHON-1364
+    except AttributeError:
+        return False
+
+def _try_eventlet_import():
+    if _is_eventlet_monkey_patched():
+        from cassandra.io.eventletreactor import EventletConnection
+        return (EventletConnection,None)
+    else:
+        return (None,None)
+
+def _try_libev_import():
+    try:
+        from cassandra.io.libevreactor import LibevConnection
+        return (LibevConnection,None)
+    except DependencyException as e:
+        return (None, e)
+
+def _try_asyncore_import():
+    try:
+        from cassandra.io.asyncorereactor import AsyncoreConnection
+        return (AsyncoreConnection,None)
+    except DependencyException as e:
+        return (None, e)
+
+def _connection_reduce_fn(val,import_fn):
+    (rv, excs) = val
+    # If we've already found a workable Connection class return immediately
+    if rv:
+        return val
+    (import_result, exc) = import_fn()
+    if exc:
+        excs.append(exc)
+    return (rv or import_result, excs)
+
+conn_fns = (_try_gevent_import, _try_eventlet_import, _try_libev_import, _try_asyncore_import)
+(conn_class, excs) = reduce(_connection_reduce_fn, conn_fns, (None,[]))
+if excs:
+    raise DependencyException("Exception loading connection class dependencies", excs)
+DefaultConnection = conn_class
 
 # Forces load of utf8 encoding module to avoid deadlock that occurs
 # if code that is being imported tries to import the module in a seperate
@@ -418,7 +452,7 @@ class GraphExecutionProfile(ExecutionProfile):
     """
 
     def __init__(self, load_balancing_policy=_NOT_SET, retry_policy=None,
-                 consistency_level=ConsistencyLevel.LOCAL_ONE, serial_consistency_level=None,
+                 consistency_level=_NOT_SET, serial_consistency_level=None,
                  request_timeout=30.0, row_factory=None,
                  graph_options=None, continuous_paging_options=_NOT_SET):
         """
@@ -443,7 +477,7 @@ class GraphExecutionProfile(ExecutionProfile):
 class GraphAnalyticsExecutionProfile(GraphExecutionProfile):
 
     def __init__(self, load_balancing_policy=None, retry_policy=None,
-                 consistency_level=ConsistencyLevel.LOCAL_ONE, serial_consistency_level=None,
+                 consistency_level=_NOT_SET, serial_consistency_level=None,
                  request_timeout=3600. * 24. * 7., row_factory=None,
                  graph_options=None):
         """
@@ -581,7 +615,7 @@ class Cluster(object):
     contact_points = ['127.0.0.1']
     """
     The list of contact points to try connecting for cluster discovery. A
-    contact point can be a string (ip, hostname) or a
+    contact point can be a string (ip or hostname), a tuple (ip/hostname, port) or a
     :class:`.connection.EndPoint` instance.
 
     Defaults to loopback interface.
@@ -785,7 +819,7 @@ class Cluster(object):
 
     By default, a ``ca_certs`` value should be supplied (the value should be
     a string pointing to the location of the CA certs file), and you probably
-    want to specify ``ssl_version`` as ``ssl.PROTOCOL_TLSv1`` to match
+    want to specify ``ssl_version`` as ``ssl.PROTOCOL_TLS`` to match
     Cassandra's default protocol.
 
     .. versionchanged:: 3.3.0
@@ -990,14 +1024,23 @@ class Cluster(object):
     cloud = None
     """
     A dict of the cloud configuration. Example::
-        
+
         {
             # path to the secure connect bundle
-            'secure_connect_bundle': '/path/to/secure-connect-dbname.zip'
+            'secure_connect_bundle': '/path/to/secure-connect-dbname.zip',
+
+            # optional config options
+            'use_default_tempdir': True  # use the system temp dir for the zip extraction
         }
 
     The zip file will be temporarily extracted in the same directory to
     load the configuration and certificates.
+    """
+
+    column_encryption_policy = None
+    """
+    An instance of :class:`cassandra.policies.ColumnEncryptionPolicy` specifying encryption materials to be
+    used for columns in this cluster.
     """
 
     @property
@@ -1101,7 +1144,8 @@ class Cluster(object):
                  monitor_reporting_enabled=True,
                  monitor_reporting_interval=30,
                  client_id=None,
-                 cloud=None):
+                 cloud=None,
+                 column_encryption_policy=None):
         """
         ``executor_threads`` defines the number of threads in a pool for handling asynchronous tasks such as
         extablishing connection pools or refreshing metadata.
@@ -1140,7 +1184,7 @@ class Cluster(object):
             else:
                 self._contact_points_explicit = True
 
-            if isinstance(contact_points, six.string_types):
+            if isinstance(contact_points, str):
                 raise TypeError("contact_points should not be a string, it should be a sequence (e.g. list) of strings")
 
             if None in contact_points:
@@ -1149,23 +1193,30 @@ class Cluster(object):
 
         self.port = port
 
+        if column_encryption_policy is not None:
+            self.column_encryption_policy = column_encryption_policy
+
         self.endpoint_factory = endpoint_factory or DefaultEndPointFactory(port=self.port)
         self.endpoint_factory.configure(self)
 
-        raw_contact_points = [cp for cp in self.contact_points if not isinstance(cp, EndPoint)]
+        raw_contact_points = []
+        for cp in [cp for cp in self.contact_points if not isinstance(cp, EndPoint)]:
+            raw_contact_points.append(cp if isinstance(cp, tuple) else (cp, port))
+
         self.endpoints_resolved = [cp for cp in self.contact_points if isinstance(cp, EndPoint)]
         self._endpoint_map_for_insights = {repr(ep): '{ip}:{port}'.format(ip=ep.address, port=ep.port)
                                            for ep in self.endpoints_resolved}
 
-        strs_resolved_map = _resolve_contact_points_to_string_map(raw_contact_points, port)
+        strs_resolved_map = _resolve_contact_points_to_string_map(raw_contact_points)
         self.endpoints_resolved.extend(list(chain(
             *[
-                [DefaultEndPoint(x, port) for x in xs if x is not None]
+                [DefaultEndPoint(ip, port) for ip, port in xs if ip is not None]
                 for xs in strs_resolved_map.values() if xs is not None
             ]
         )))
+
         self._endpoint_map_for_insights.update(
-            {key: ['{ip}:{port}'.format(ip=ip, port=port) for ip in value]
+            {key: ['{ip}:{port}'.format(ip=ip, port=port) for ip, port in value]
              for key, value in strs_resolved_map.items() if value is not None}
         )
 
@@ -1434,7 +1485,7 @@ class Cluster(object):
             # results will include Address instances
             results = session.execute("SELECT * FROM users")
             row = results[0]
-            print row.id, row.location.street, row.location.zipcode
+            print(row.id, row.location.street, row.location.zipcode)
 
         """
         if self.protocol_version < 3:
@@ -1563,7 +1614,7 @@ class Cluster(object):
         If :attr:`~.Cluster.protocol_version` is set to 3 or higher, this
         is not supported (there is always one connection per host, unless
         the host is remote and :attr:`connect_to_remote_hosts` is :const:`False`)
-        and using this will result in an :exc:`~.UnsupporteOperation`.
+        and using this will result in an :exc:`~.UnsupportedOperation`.
         """
         if self.protocol_version >= 3:
             raise UnsupportedOperation(
@@ -1596,7 +1647,7 @@ class Cluster(object):
         If :attr:`~.Cluster.protocol_version` is set to 3 or higher, this
         is not supported (there is always one connection per host, unless
         the host is remote and :attr:`connect_to_remote_hosts` is :const:`False`)
-        and using this will result in an :exc:`~.UnsupporteOperation`.
+        and using this will result in an :exc:`~.UnsupportedOperation`.
         """
         if self.protocol_version >= 3:
             raise UnsupportedOperation(
@@ -1768,8 +1819,8 @@ class Cluster(object):
         return session
 
     def _session_register_user_types(self, session):
-        for keyspace, type_map in six.iteritems(self._user_types):
-            for udt_name, klass in six.iteritems(type_map):
+        for keyspace, type_map in self._user_types.items():
+            for udt_name, klass in type_map.items():
                 session.user_type_registered(keyspace, udt_name, klass)
 
     def _cleanup_failed_on_up_handling(self, host):
@@ -2384,7 +2435,7 @@ class Session(object):
         *Deprecated:* use execution profiles instead
         """
         warn("Setting the consistency level at the session level will be removed in 4.0. Consider using "
-             "execution profiles and setting the desired consitency level to the EXEC_PROFILE_DEFAULT profile."
+             "execution profiles and setting the desired consistency level to the EXEC_PROFILE_DEFAULT profile."
              , DeprecationWarning)
         self._validate_set_legacy_config('default_consistency_level', cl)
 
@@ -2548,6 +2599,15 @@ class Session(object):
         self.session_id = uuid.uuid4()
         self._graph_paging_available = self._check_graph_paging_available()
 
+        if self.cluster.column_encryption_policy is not None:
+            try:
+                self.client_protocol_handler = type(
+                    str(self.session_id) + "-ProtocolHandler",
+                    (ProtocolHandler,),
+                    {"column_encryption_policy": self.cluster.column_encryption_policy})
+            except AttributeError:
+                log.info("Unable to set column encryption policy for session")
+
         if self.cluster.monitor_reporting_enabled:
             cc_host = self.cluster.get_control_connection_host()
             valid_insights_version = (cc_host and version_supports_insights(cc_host.dse_version))
@@ -2649,7 +2709,7 @@ class Session(object):
         """
         custom_payload = custom_payload if custom_payload else {}
         if execute_as:
-            custom_payload[_proxy_execute_key] = six.b(execute_as)
+            custom_payload[_proxy_execute_key] = execute_as.encode()
 
         future = self._create_response_future(
             query, parameters, trace, custom_payload, timeout,
@@ -2713,8 +2773,8 @@ class Session(object):
 
         custom_payload = execution_profile.graph_options.get_options_map()
         if execute_as:
-            custom_payload[_proxy_execute_key] = six.b(execute_as)
-        custom_payload[_request_timeout_key] = int64_pack(long(execution_profile.request_timeout * 1000))
+            custom_payload[_proxy_execute_key] = execute_as.encode()
+        custom_payload[_request_timeout_key] = int64_pack(int(execution_profile.request_timeout * 1000))
 
         future = self._create_response_future(query, parameters=None, trace=trace, custom_payload=custom_payload,
                                               timeout=_NOT_SET, execution_profile=execution_profile)
@@ -2851,7 +2911,7 @@ class Session(object):
 
         prepared_statement = None
 
-        if isinstance(query, six.string_types):
+        if isinstance(query, str):
             query = SimpleStatement(query)
         elif isinstance(query, PreparedStatement):
             query = query.bind(parameters)
@@ -3067,7 +3127,7 @@ class Session(object):
         prepared_keyspace = keyspace if keyspace else None
         prepared_statement = PreparedStatement.from_message(
             response.query_id, response.bind_metadata, response.pk_indexes, self.cluster.metadata, query, prepared_keyspace,
-            self._protocol_version, response.column_metadata, response.result_metadata_id)
+            self._protocol_version, response.column_metadata, response.result_metadata_id, self.cluster.column_encryption_policy)
         prepared_statement.custom_payload = future.custom_payload
 
         self.cluster.add_prepared(response.query_id, prepared_statement)
@@ -3319,10 +3379,6 @@ class Session(object):
                 'User type %s does not exist in keyspace %s' % (user_type, keyspace))
 
         field_names = type_meta.field_names
-        if six.PY2:
-            # go from unicode to string to avoid decode errors from implicit
-            # decode when formatting non-ascii values
-            field_names = [fn.encode('utf-8') for fn in field_names]
 
         def encode(val):
             return '{ %s }' % ' , '.join('%s : %s' % (
@@ -3420,7 +3476,16 @@ class ControlConnection(object):
     _SELECT_SCHEMA_PEERS_TEMPLATE = "SELECT peer, host_id, {nt_col_name}, schema_version FROM system.peers"
     _SELECT_SCHEMA_LOCAL = "SELECT schema_version FROM system.local WHERE key='local'"
 
+    _SELECT_PEERS_V2 = "SELECT * FROM system.peers_v2"
+    _SELECT_PEERS_NO_TOKENS_V2 = "SELECT host_id, peer, peer_port, data_center, rack, native_address, native_port, release_version, schema_version FROM system.peers_v2"
+    _SELECT_SCHEMA_PEERS_V2 = "SELECT host_id, peer, peer_port, native_address, native_port, schema_version FROM system.peers_v2"
+
     _MINIMUM_NATIVE_ADDRESS_DSE_VERSION = Version("6.0.0")
+
+    class PeersQueryType(object):
+        """internal Enum for _peers_query"""
+        PEERS = 0
+        PEERS_SCHEMA = 1
 
     _is_shutdown = False
     _timeout = None
@@ -3432,6 +3497,8 @@ class ControlConnection(object):
 
     _schema_meta_enabled = True
     _token_meta_enabled = True
+
+    _uses_peers_v2 = True
 
     # for testing purposes
     _time = time
@@ -3469,7 +3536,7 @@ class ControlConnection(object):
         self._protocol_version = self._cluster.protocol_version
         self._set_new_connection(self._reconnect_internal())
 
-        self._cluster.metadata.dbaas = self._connection._product_type == dscloud.PRODUCT_APOLLO
+        self._cluster.metadata.dbaas = self._connection._product_type == dscloud.DATASTAX_CLOUD_PRODUCT_TYPE
 
     def _set_new_connection(self, conn):
         """
@@ -3530,6 +3597,14 @@ class ControlConnection(object):
                 break
             except ProtocolVersionUnsupported as e:
                 self._cluster.protocol_downgrade(host.endpoint, e.startup_version)
+            except ProtocolException as e:
+                # protocol v5 is out of beta in C* >=4.0-beta5 and is now the default driver
+                # protocol version. If the protocol version was not explicitly specified,
+                # and that the server raises a beta protocol error, we should downgrade.
+                if not self._cluster._protocol_version_explicit and e.is_beta_protocol_error:
+                    self._cluster.protocol_downgrade(host.endpoint, self._cluster.protocol_version)
+                else:
+                    raise
 
         log.debug("[control connection] Established new connection %r, "
                   "registering watchers and refreshing schema and topology",
@@ -3547,13 +3622,25 @@ class ControlConnection(object):
                 "SCHEMA_CHANGE": partial(_watch_callback, self_weakref, '_handle_schema_change')
             }, register_timeout=self._timeout)
 
-            sel_peers = self._peers_query_for_version(connection, self._SELECT_PEERS_NO_TOKENS_TEMPLATE)
+            sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
             sel_local = self._SELECT_LOCAL if self._token_meta_enabled else self._SELECT_LOCAL_NO_TOKENS
             peers_query = QueryMessage(query=sel_peers, consistency_level=ConsistencyLevel.ONE)
             local_query = QueryMessage(query=sel_local, consistency_level=ConsistencyLevel.ONE)
-            shared_results = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout)
+            (peers_success, peers_result), (local_success, local_result) = connection.wait_for_responses(
+                peers_query, local_query, timeout=self._timeout, fail_on_error=False)
 
+            if not local_success:
+                raise local_result
+
+            if not peers_success:
+                # error with the peers v2 query, fallback to peers v1
+                self._uses_peers_v2 = False
+                sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
+                peers_query = QueryMessage(query=sel_peers, consistency_level=ConsistencyLevel.ONE)
+                peers_result = connection.wait_for_response(
+                    peers_query, timeout=self._timeout)
+
+            shared_results = (peers_result, local_result)
             self._refresh_node_list_and_token_map(connection, preloaded_results=shared_results)
             self._refresh_schema(connection, preloaded_results=shared_results, schema_agreement_wait=-1)
         except Exception:
@@ -3675,20 +3762,18 @@ class ControlConnection(object):
 
     def _refresh_node_list_and_token_map(self, connection, preloaded_results=None,
                                          force_token_rebuild=False):
-
         if preloaded_results:
             log.debug("[control connection] Refreshing node list and token map using preloaded results")
             peers_result = preloaded_results[0]
             local_result = preloaded_results[1]
         else:
             cl = ConsistencyLevel.ONE
+            sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
             if not self._token_meta_enabled:
                 log.debug("[control connection] Refreshing node list without token map")
-                sel_peers = self._peers_query_for_version(connection, self._SELECT_PEERS_NO_TOKENS_TEMPLATE)
                 sel_local = self._SELECT_LOCAL_NO_TOKENS
             else:
                 log.debug("[control connection] Refreshing node list and token map")
-                sel_peers = self._SELECT_PEERS
                 sel_local = self._SELECT_LOCAL
             peers_query = QueryMessage(query=sel_peers, consistency_level=cl)
             local_query = QueryMessage(query=sel_local, consistency_level=cl)
@@ -3718,13 +3803,17 @@ class ControlConnection(object):
                 self._update_location_info(host, datacenter, rack)
                 host.host_id = local_row.get("host_id")
                 host.listen_address = local_row.get("listen_address")
-                host.broadcast_address = local_row.get("broadcast_address")
+                host.listen_port = local_row.get("listen_port")
+                host.broadcast_address = _NodeInfo.get_broadcast_address(local_row)
+                host.broadcast_port = _NodeInfo.get_broadcast_port(local_row)
 
-                host.broadcast_rpc_address = self._address_from_row(local_row)
+                host.broadcast_rpc_address = _NodeInfo.get_broadcast_rpc_address(local_row)
+                host.broadcast_rpc_port = _NodeInfo.get_broadcast_rpc_port(local_row)
                 if host.broadcast_rpc_address is None:
                     if self._token_meta_enabled:
                         # local rpc_address is not available, use the connection endpoint
                         host.broadcast_rpc_address = connection.endpoint.address
+                        host.broadcast_rpc_port = connection.endpoint.port
                     else:
                         # local rpc_address has not been queried yet, try to fetch it
                         # separately, which might fail because C* < 2.1.6 doesn't have rpc_address
@@ -3737,9 +3826,11 @@ class ControlConnection(object):
                             row = dict_factory(
                                 local_rpc_address_result.column_names,
                                 local_rpc_address_result.parsed_rows)
-                            host.broadcast_rpc_address = row[0]['rpc_address']
+                            host.broadcast_rpc_address = _NodeInfo.get_broadcast_rpc_address(row[0])
+                            host.broadcast_rpc_port = _NodeInfo.get_broadcast_rpc_port(row[0])
                         else:
                             host.broadcast_rpc_address = connection.endpoint.address
+                            host.broadcast_rpc_port = connection.endpoint.port
 
                 host.release_version = local_row.get("release_version")
                 host.dse_version = local_row.get("dse_version")
@@ -3754,12 +3845,14 @@ class ControlConnection(object):
         # any new nodes, so we need this additional check.  (See PYTHON-90)
         should_rebuild_token_map = force_token_rebuild or self._cluster.metadata.partitioner is None
         for row in peers_result:
+            if not self._is_valid_peer(row):
+                log.warning(
+                    "Found an invalid row for peer (%s). Ignoring host." %
+                    _NodeInfo.get_broadcast_rpc_address(row))
+                continue
+
             endpoint = self._cluster.endpoint_factory.create(row)
 
-            tokens = row.get("tokens", None)
-            if 'tokens' in row and not tokens:  # it was selected, but empty
-                log.warning("Excluding host (%s) with no tokens in system.peers table of %s." % (endpoint, connection.endpoint))
-                continue
             if endpoint in found_hosts:
                 log.warning("Found multiple hosts with the same endpoint (%s). Excluding peer %s", endpoint, row.get("peer"))
                 continue
@@ -3777,13 +3870,16 @@ class ControlConnection(object):
                 should_rebuild_token_map |= self._update_location_info(host, datacenter, rack)
 
             host.host_id = row.get("host_id")
-            host.broadcast_address = row.get("peer")
-            host.broadcast_rpc_address = self._address_from_row(row)
+            host.broadcast_address = _NodeInfo.get_broadcast_address(row)
+            host.broadcast_port = _NodeInfo.get_broadcast_port(row)
+            host.broadcast_rpc_address = _NodeInfo.get_broadcast_rpc_address(row)
+            host.broadcast_rpc_port = _NodeInfo.get_broadcast_rpc_port(row)
             host.release_version = row.get("release_version")
             host.dse_version = row.get("dse_version")
             host.dse_workload = row.get("workload")
             host.dse_workloads = row.get("workloads")
 
+            tokens = row.get("tokens", None)
             if partitioner and tokens and self._token_meta_enabled:
                 token_map[host] = tokens
 
@@ -3797,6 +3893,12 @@ class ControlConnection(object):
         if partitioner and should_rebuild_token_map:
             log.debug("[control connection] Rebuilding token map due to topology changes")
             self._cluster.metadata.rebuild_token_map(partitioner, token_map)
+
+    @staticmethod
+    def _is_valid_peer(row):
+        return bool(_NodeInfo.get_broadcast_rpc_address(row) and row.get("host_id") and
+                    row.get("data_center") and row.get("rack") and
+                    ('tokens' not in row or row.get('tokens')))
 
     def _update_location_info(self, host, datacenter, rack):
         if host.datacenter == datacenter and host.rack == rack:
@@ -3834,7 +3936,8 @@ class ControlConnection(object):
 
     def _handle_topology_change(self, event):
         change_type = event["change_type"]
-        host = self._cluster.metadata.get_host(event["address"][0])
+        addr, port = event["address"]
+        host = self._cluster.metadata.get_host(addr, port)
         if change_type == "NEW_NODE" or change_type == "MOVED_NODE":
             if self._topology_event_refresh_window >= 0:
                 delay = self._delay_for_event_type('topology_change', self._topology_event_refresh_window)
@@ -3844,7 +3947,8 @@ class ControlConnection(object):
 
     def _handle_status_change(self, event):
         change_type = event["change_type"]
-        host = self._cluster.metadata.get_host(event["address"][0])
+        addr, port = event["address"]
+        host = self._cluster.metadata.get_host(addr, port)
         if change_type == "UP":
             delay = self._delay_for_event_type('status_change', self._status_event_refresh_window)
             if host is None:
@@ -3898,7 +4002,7 @@ class ControlConnection(object):
             elapsed = 0
             cl = ConsistencyLevel.ONE
             schema_mismatches = None
-            select_peers_query = self._peers_query_for_version(connection, self._SELECT_SCHEMA_PEERS_TEMPLATE)
+            select_peers_query = self._get_peers_query(self.PeersQueryType.PEERS_SCHEMA, connection)
 
             while elapsed < total_timeout:
                 peers_query = QueryMessage(query=select_peers_query, consistency_level=cl)
@@ -3953,45 +4057,52 @@ class ControlConnection(object):
             log.debug("[control connection] Schemas match")
             return None
 
-        return dict((version, list(nodes)) for version, nodes in six.iteritems(versions))
+        return dict((version, list(nodes)) for version, nodes in versions.items())
 
-    def _address_from_row(self, row):
+    def _get_peers_query(self, peers_query_type, connection=None):
         """
-        Parse the broadcast rpc address from a row and return it untranslated.
-        """
-        addr = None
-        if "rpc_address" in row:
-            addr = row.get("rpc_address")  # peers and local
-        if "native_transport_address" in row:
-            addr = row.get("native_transport_address")
-        if not addr or addr in ["0.0.0.0", "::"]:
-            addr = row.get("peer")
-        return addr
+        Determine the peers query to use.
 
-    def _peers_query_for_version(self, connection, peers_query_template):
-        """
+        :param peers_query_type: Should be one of PeersQueryType enum.
+
+        If _uses_peers_v2 is True, return the proper peers_v2 query (no templating).
+        Else, apply the logic below to choose the peers v1 address column name:
+
         Given a connection:
 
         - find the server product version running on the connection's host,
         - use that to choose the column name for the transport address (see APOLLO-1130), and
         - use that column name in the provided peers query template.
-
-        The provided template should be a string with a format replacement
-        field named nt_col_name.
         """
-        host_release_version = self._cluster.metadata.get_host(connection.endpoint).release_version
-        host_dse_version = self._cluster.metadata.get_host(connection.endpoint).dse_version
-        uses_native_address_query = (
-            host_dse_version and Version(host_dse_version) >= self._MINIMUM_NATIVE_ADDRESS_DSE_VERSION)
+        if peers_query_type not in (self.PeersQueryType.PEERS, self.PeersQueryType.PEERS_SCHEMA):
+            raise ValueError("Invalid peers query type: %s" % peers_query_type)
 
-        if uses_native_address_query:
-            select_peers_query = peers_query_template.format(nt_col_name="native_transport_address")
-        elif host_release_version:
-                select_peers_query = peers_query_template.format(nt_col_name="rpc_address")
+        if self._uses_peers_v2:
+            if peers_query_type == self.PeersQueryType.PEERS:
+                query = self._SELECT_PEERS_V2 if self._token_meta_enabled else self._SELECT_PEERS_NO_TOKENS_V2
+            else:
+                query = self._SELECT_SCHEMA_PEERS_V2
         else:
-            select_peers_query = self._SELECT_PEERS
+            if peers_query_type == self.PeersQueryType.PEERS and self._token_meta_enabled:
+                query = self._SELECT_PEERS
+            else:
+                query_template = (self._SELECT_SCHEMA_PEERS_TEMPLATE
+                                  if peers_query_type == self.PeersQueryType.PEERS_SCHEMA
+                                  else self._SELECT_PEERS_NO_TOKENS_TEMPLATE)
 
-        return select_peers_query
+                host_release_version = self._cluster.metadata.get_host(connection.endpoint).release_version
+                host_dse_version = self._cluster.metadata.get_host(connection.endpoint).dse_version
+                uses_native_address_query = (
+                    host_dse_version and Version(host_dse_version) >= self._MINIMUM_NATIVE_ADDRESS_DSE_VERSION)
+
+                if uses_native_address_query:
+                    query = query_template.format(nt_col_name="native_transport_address")
+                elif host_release_version:
+                    query = query_template.format(nt_col_name="rpc_address")
+                else:
+                    query = self._SELECT_PEERS
+
+        return query
 
     def _signal_error(self):
         with self._lock:
@@ -4066,7 +4177,7 @@ class _Scheduler(Thread):
     is_shutdown = False
 
     def __init__(self, executor):
-        self._queue = Queue.PriorityQueue()
+        self._queue = queue.PriorityQueue()
         self._scheduled_tasks = set()
         self._count = count()
         self._executor = executor
@@ -4124,7 +4235,7 @@ class _Scheduler(Thread):
                     else:
                         self._queue.put_nowait((run_at, i, task))
                         break
-            except Queue.Empty:
+            except queue.Empty:
                 pass
 
             time.sleep(0.1)
@@ -4181,7 +4292,7 @@ class ResponseFuture(object):
 
     coordinator_host = None
     """
-    The host from which we recieved a response
+    The host from which we received a response
     """
 
     attempted_hosts = None
@@ -4299,10 +4410,17 @@ class ResponseFuture(object):
 
             pool = self.session._pools.get(self._current_host)
             if pool and not pool.is_shutdown:
+                # Do not return the stream ID to the pool yet. We cannot reuse it
+                # because the node might still be processing the query and will
+                # return a late response to that query - if we used such stream
+                # before the response to the previous query has arrived, the new
+                # query could get a response from the old query
                 with self._connection.lock:
-                    self._connection.request_ids.append(self._req_id)
+                    self._connection.orphaned_request_ids.add(self._req_id)
+                    if len(self._connection.orphaned_request_ids) >= self._connection.orphaned_threshold:
+                        self._connection.orphaned_threshold_reached = True
 
-                pool.return_connection(self._connection)
+                pool.return_connection(self._connection, stream_was_orphaned=True)
 
         errors = self._errors
         if not errors:
@@ -4400,7 +4518,9 @@ class ResponseFuture(object):
         except NoConnectionsAvailable as exc:
             log.debug("All connections for host %s are at capacity, moving to the next host", host)
             self._errors[host] = exc
-            return None
+        except ConnectionBusy as exc:
+            log.debug("Connection for host %s is busy, moving to the next host", host)
+            self._errors[host] = exc
         except Exception as exc:
             log.debug("Error querying host %s", host, exc_info=True)
             self._errors[host] = exc
@@ -4408,7 +4528,8 @@ class ResponseFuture(object):
                 self._metrics.on_connection_error()
             if connection:
                 pool.return_connection(connection)
-            return None
+
+        return None
 
     @property
     def has_more_pages(self):
@@ -5076,6 +5197,12 @@ class ResultSet(object):
         if not self.response_future._continuous_paging_session:
             self.fetch_next_page()
             self._page_iter = iter(self._current_rows)
+
+            # Some servers can return empty pages in this case; Scylla is known to do
+            # so in some circumstances.  Guard against this by recursing to handle
+            # the next(iter) call.  If we have an empty page in that case it will
+            # get handled by the StopIteration handler when we recurse.
+            return self.next()
 
         return next(self._page_iter)
 

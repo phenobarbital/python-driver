@@ -11,15 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from datetime import datetime, timedelta, time
 from decimal import Decimal
 from uuid import uuid1, uuid4, UUID
-import six
 
 from cassandra.cqlengine import columns
 from cassandra.cqlengine.management import sync_table
@@ -104,15 +100,15 @@ class BaseColumnIOTest(BaseCassEngTestCase):
 class TestBlobIO(BaseColumnIOTest):
 
     column = columns.Blob
-    pkey_val = six.b('blake'), uuid4().bytes
-    data_val = six.b('eggleston'), uuid4().bytes
+    pkey_val = b'blake', uuid4().bytes
+    data_val = b'eggleston', uuid4().bytes
 
 
 class TestBlobIO2(BaseColumnIOTest):
 
     column = columns.Blob
-    pkey_val = bytearray(six.b('blake')), uuid4().bytes
-    data_val = bytearray(six.b('eggleston')), uuid4().bytes
+    pkey_val = bytearray(b'blake'), uuid4().bytes
+    data_val = bytearray(b'eggleston'), uuid4().bytes
 
 
 class TestTextIO(BaseColumnIOTest):

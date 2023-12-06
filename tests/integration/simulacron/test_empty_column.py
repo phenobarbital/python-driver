@@ -11,10 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from collections import namedtuple, OrderedDict
 
@@ -27,8 +24,8 @@ from cassandra.cqlengine import columns
 from cassandra.cqlengine.connection import set_session
 from cassandra.cqlengine.models import Model
 
-from tests.integration import PROTOCOL_VERSION, requiressimulacron
-from tests.integration.simulacron import SimulacronCluster
+from tests.integration import requiressimulacron
+from tests.integration.simulacron import PROTOCOL_VERSION, SimulacronCluster
 from tests.integration.simulacron.utils import PrimeQuery, prime_request
 
 

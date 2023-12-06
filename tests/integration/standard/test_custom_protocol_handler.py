@@ -12,23 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from cassandra.protocol import ProtocolHandler, ResultMessage, QueryMessage, UUIDType, read_int
 from cassandra.query import tuple_factory, SimpleStatement
-from cassandra.cluster import (Cluster, ResponseFuture, ExecutionProfile, EXEC_PROFILE_DEFAULT,
+from cassandra.cluster import (ResponseFuture, ExecutionProfile, EXEC_PROFILE_DEFAULT,
     ContinuousPagingOptions, NoHostAvailable)
 from cassandra import ProtocolVersion, ConsistencyLevel
 
-from tests.integration import use_singledc, PROTOCOL_VERSION, drop_keyspace_shutdown_cluster, \
+from tests.integration import use_singledc, drop_keyspace_shutdown_cluster, \
     greaterthanorequalcass30, execute_with_long_wait_retry, greaterthanorequaldse51, greaterthanorequalcass3_10, \
-    greaterthanorequalcass31
+    TestCluster, greaterthanorequalcass40, requirecassandra
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES
 from tests.integration.standard.utils import create_table_with_all_types, get_all_primitive_params
-from six import binary_type
 
 import uuid
 import mock
@@ -43,7 +39,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.cluster = Cluster(protocol_version=PROTOCOL_VERSION)
+        cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
         cls.session.execute("CREATE KEYSPACE custserdes WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
         cls.session.set_keyspace("custserdes")
@@ -68,8 +64,9 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         """
 
         # Ensure that we get normal uuid back first
-        cluster = Cluster(protocol_version=PROTOCOL_VERSION,
-                          execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)})
+        cluster = TestCluster(
+            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+        )
         session = cluster.connect(keyspace="custserdes")
 
         result = session.execute("SELECT schema_version FROM system.local")
@@ -80,7 +77,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         session.client_protocol_handler = CustomTestRawRowType
         result_set = session.execute("SELECT schema_version FROM system.local")
         raw_value = result_set[0][0]
-        self.assertTrue(isinstance(raw_value, binary_type))
+        self.assertTrue(isinstance(raw_value, bytes))
         self.assertEqual(len(raw_value), 16)
 
         # Ensure that we get normal uuid back when we re-connect
@@ -105,8 +102,9 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         @test_category data_types:serialization
         """
         # Connect using a custom protocol handler that tracks the various types the result message is used with.
-        cluster = Cluster(protocol_version=PROTOCOL_VERSION,
-                          execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)})
+        cluster = TestCluster(
+            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
+        )
         session = cluster.connect(keyspace="custserdes")
         session.client_protocol_handler = CustomProtocolHandlerResultMessageTracked
 
@@ -122,7 +120,8 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         self.assertEqual(len(CustomResultMessageTracked.checked_rev_row_set), len(PRIMITIVE_DATATYPES)-1)
         cluster.shutdown()
 
-    @greaterthanorequalcass31
+    @requirecassandra
+    @greaterthanorequalcass40
     def test_protocol_divergence_v5_fail_by_continuous_paging(self):
         """
         Test to validate that V5 and DSE_V1 diverge. ContinuousPagingOptions is not supported by V5
@@ -133,7 +132,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
 
         @test_category connection
         """
-        cluster = Cluster(protocol_version=ProtocolVersion.V5, allow_beta_protocol_version=True)
+        cluster = TestCluster(protocol_version=ProtocolVersion.V5, allow_beta_protocol_version=True)
         session = cluster.connect()
 
         max_pages = 4
@@ -168,7 +167,8 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.V4, uses_int_query_flag=False,
                                                         int_flag=True)
 
-    @greaterthanorequalcass3_10
+    @requirecassandra
+    @greaterthanorequalcass40
     def test_protocol_v5_uses_flag_int(self):
         """
         Test to validate that the _PAGE_SIZE_FLAG is treated correctly using write_uint for V5
@@ -194,7 +194,8 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         self._protocol_divergence_fail_by_flag_uses_int(ProtocolVersion.DSE_V1, uses_int_query_flag=True,
                                                         int_flag=True)
 
-    @greaterthanorequalcass3_10
+    @requirecassandra
+    @greaterthanorequalcass40
     def test_protocol_divergence_v5_fail_by_flag_uses_int(self):
         """
         Test to validate that the _PAGE_SIZE_FLAG is treated correctly using write_uint for V5
@@ -228,7 +229,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
         return future
 
     def _protocol_divergence_fail_by_flag_uses_int(self, version, uses_int_query_flag, int_flag = True, beta=False):
-        cluster = Cluster(protocol_version=version, allow_beta_protocol_version=beta)
+        cluster = TestCluster(protocol_version=version, allow_beta_protocol_version=beta)
         session = cluster.connect()
 
         query_one = SimpleStatement("INSERT INTO test3rf.test (k, v) VALUES (1, 1)")
@@ -259,7 +260,7 @@ class CustomResultMessageRaw(ResultMessage):
     my_type_codes[0xc] = UUIDType
     type_codes = my_type_codes
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata):
+    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
             self.recv_results_metadata(f, user_type_map)
             column_metadata = self.column_metadata or result_metadata
             rowcount = read_int(f)
@@ -288,7 +289,7 @@ class CustomResultMessageTracked(ResultMessage):
     type_codes = my_type_codes
     checked_rev_row_set = set()
 
-    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata):
+    def recv_results_rows(self, f, protocol_version, user_type_map, result_metadata, column_encryption_policy):
         self.recv_results_metadata(f, user_type_map)
         column_metadata = self.column_metadata or result_metadata
         rowcount = read_int(f)

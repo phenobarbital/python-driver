@@ -13,15 +13,11 @@
 # limitations under the License.
 
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest
+import unittest
 
 from cassandra.query import BatchStatement
-from cassandra.cluster import Cluster
 
-from tests.integration import use_singledc, PROTOCOL_VERSION, local
+from tests.integration import use_singledc, PROTOCOL_VERSION, local, TestCluster
 
 
 def setup_module():
@@ -35,7 +31,7 @@ class ClientWarningTests(unittest.TestCase):
         if PROTOCOL_VERSION < 4:
             return
 
-        cls.cluster = Cluster(protocol_version=PROTOCOL_VERSION)
+        cls.cluster = TestCluster()
         cls.session = cls.cluster.connect()
 
         cls.session.execute("CREATE TABLE IF NOT EXISTS test1rf.client_warning (k int, v0 int, v1 int, PRIMARY KEY (k, v0))")
@@ -74,7 +70,7 @@ class ClientWarningTests(unittest.TestCase):
         future = self.session.execute_async(self.warn_batch)
         future.result()
         self.assertEqual(len(future.warnings), 1)
-        self.assertRegexpMatches(future.warnings[0], 'Batch.*exceeding.*')
+        self.assertRegex(future.warnings[0], 'Batch.*exceeding.*')
 
     def test_warning_with_trace(self):
         """
@@ -90,7 +86,7 @@ class ClientWarningTests(unittest.TestCase):
         future = self.session.execute_async(self.warn_batch, trace=True)
         future.result()
         self.assertEqual(len(future.warnings), 1)
-        self.assertRegexpMatches(future.warnings[0], 'Batch.*exceeding.*')
+        self.assertRegex(future.warnings[0], 'Batch.*exceeding.*')
         self.assertIsNotNone(future.get_query_trace())
 
     @local
@@ -109,7 +105,7 @@ class ClientWarningTests(unittest.TestCase):
         future = self.session.execute_async(self.warn_batch, custom_payload=payload)
         future.result()
         self.assertEqual(len(future.warnings), 1)
-        self.assertRegexpMatches(future.warnings[0], 'Batch.*exceeding.*')
+        self.assertRegex(future.warnings[0], 'Batch.*exceeding.*')
         self.assertDictEqual(future.custom_payload, payload)
 
     @local
@@ -128,6 +124,6 @@ class ClientWarningTests(unittest.TestCase):
         future = self.session.execute_async(self.warn_batch, trace=True, custom_payload=payload)
         future.result()
         self.assertEqual(len(future.warnings), 1)
-        self.assertRegexpMatches(future.warnings[0], 'Batch.*exceeding.*')
+        self.assertRegex(future.warnings[0], 'Batch.*exceeding.*')
         self.assertIsNotNone(future.get_query_trace())
         self.assertDictEqual(future.custom_payload, payload)

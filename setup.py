@@ -37,8 +37,6 @@ from distutils.errors import (CCompilerError, DistutilsPlatformError,
                               DistutilsExecError)
 from distutils.cmd import Command
 
-PY3 = sys.version_info[0] == 3
-
 try:
     import subprocess
     has_subprocess = True
@@ -403,14 +401,11 @@ def run_setup(extensions):
         else:
             sys.stderr.write("Bypassing Cython setup requirement\n")
 
-    dependencies = ['six >=1.9',
-                    'geomet>=0.1,<0.2']
-
-    if not PY3:
-        dependencies.append('futures')
+    dependencies = ['geomet>=0.1,<0.3']
 
     _EXTRAS_REQUIRE = {
-        'graph': ['gremlinpython==3.3.4']
+        'graph': ['gremlinpython==3.4.6'],
+        'cle': ['cryptography>=35.0']
     }
 
     setup(
@@ -428,7 +423,8 @@ def run_setup(extensions):
         packages=[
             'cassandra', 'cassandra.io', 'cassandra.cqlengine', 'cassandra.graph',
             'cassandra.datastax', 'cassandra.datastax.insights', 'cassandra.datastax.graph',
-            'cassandra.datastax.graph.fluent', 'cassandra.datastax.cloud'
+            'cassandra.datastax.graph.fluent', 'cassandra.datastax.cloud',
+            "cassandra.column_encryption"
         ],
         keywords='cassandra,cql,orm,dse,graph',
         include_package_data=True,
@@ -442,10 +438,6 @@ def run_setup(extensions):
             'Natural Language :: English',
             'Operating System :: OS Independent',
             'Programming Language :: Python',
-            'Programming Language :: Python :: 2.7',
-            'Programming Language :: Python :: 3.4',
-            'Programming Language :: Python :: 3.5',
-            'Programming Language :: Python :: 3.6',
             'Programming Language :: Python :: 3.7',
             'Programming Language :: Python :: 3.8',
             'Programming Language :: Python :: Implementation :: CPython',

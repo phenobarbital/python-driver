@@ -27,7 +27,19 @@ hard to maintain. This fluent API allows you to build Gremlin traversals and wri
 queries directly in Python. These native traversal queries can be executed explicitly, with
 a `Session` object, or implicitly::
 
-    g = DseGraph.traversal_source(session=dse_session)
+    from cassandra.cluster import Cluster, EXEC_PROFILE_GRAPH_DEFAULT
+    from cassandra.datastax.graph import GraphProtocol
+    from cassandra.datastax.graph.fluent import DseGraph
+
+    # Create an execution profile, using GraphSON3 for Core graphs
+    ep_graphson3 = DseGraph.create_execution_profile(
+        'my_core_graph_name',
+        graph_protocol=GraphProtocol.GRAPHSON_3_0)
+    cluster = Cluster(execution_profiles={EXEC_PROFILE_GRAPH_DEFAULT: ep_graphson3})
+    session = cluster.connect()
+
+    # Execute a fluent graph query
+    g = DseGraph.traversal_source(session=session)
     g.addV('genre').property('genreId', 1).property('name', 'Action').next()
 
     # implicit execution caused by iterating over results
@@ -50,19 +62,28 @@ Configuring a Traversal Execution Profile
 The fluent api takes advantage of *configuration profiles* to allow
 different execution configurations for the various query handlers. Graph traversal
 execution requires a custom execution profile to enable Gremlin-bytecode as
-query language. Here is how to accomplish this configuration:
+query language. With Core graphs, it is important to use GraphSON3. Here is how
+to accomplish this configuration:
 
 .. code-block:: python
 
     from cassandra.cluster import Cluster, EXEC_PROFILE_GRAPH_DEFAULT
+    from cassandra.datastax.graph import GraphProtocol
     from cassandra.datastax.graph.fluent import DseGraph
 
-    ep = DseGraph.create_execution_profile('graph_name')
-    cluster = Cluster(execution_profiles={EXEC_PROFILE_GRAPH_DEFAULT: ep})
+    # Using GraphSON3 as graph protocol is a requirement with Core graphs.
+    ep = DseGraph.create_execution_profile(
+        'graph_name',
+        graph_protocol=GraphProtocol.GRAPHSON_3_0)
+
+    # For Classic graphs, GraphSON1, GraphSON2 and GraphSON3 (DSE 6.8+) are supported.
+    ep_classic = DseGraph.create_execution_profile('classic_graph_name')  # default is GraphSON2
+
+    cluster = Cluster(execution_profiles={EXEC_PROFILE_GRAPH_DEFAULT: ep, 'classic': ep_classic})
     session = cluster.connect()
 
     g = DseGraph.traversal_source(session)  # Build the GraphTraversalSource
-    print g.V().toList()  # Traverse the Graph
+    print(g.V().toList())  # Traverse the Graph
 
 Note that the execution profile created with :meth:`DseGraph.create_execution_profile <.datastax.graph.fluent.DseGraph.create_execution_profile>` cannot
 be used for any groovy string queries.
@@ -80,23 +101,49 @@ Below is an example of explicit execution. For this example, assume the schema h
 
 .. code-block:: python
 
+    from cassandra.cluster import Cluster, EXEC_PROFILE_GRAPH_DEFAULT
+    from cassandra.datastax.graph import GraphProtocol
     from cassandra.datastax.graph.fluent import DseGraph
     from pprint import pprint
 
-    # create a tinkerpop graphson2 ExecutionProfile
-    ep = DseGraph.create_execution_profile('graph_name')
+    ep = DseGraph.create_execution_profile(
+        'graph_name',
+        graph_protocol=GraphProtocol.GRAPHSON_3_0)
     cluster = Cluster(execution_profiles={EXEC_PROFILE_GRAPH_DEFAULT: ep})
     session = cluster.connect()
 
     g = DseGraph.traversal_source(session=session)
+
+Convert a traversal to a bytecode query for classic graphs::
+
     addV_query = DseGraph.query_from_traversal(
-        g.addV('genre').property('genreId', 1).property('name', 'Action')
+        g.addV('genre').property('genreId', 1).property('name', 'Action'),
+        graph_protocol=GraphProtocol.GRAPHSON_3_0
     )
-    v_query = DseGraph.query_from_traversal(g.V())
+    v_query = DseGraph.query_from_traversal(
+        g.V(),
+        graph_protocol=GraphProtocol.GRAPHSON_3_0)
 
     for result in session.execute_graph(addV_query):
         pprint(result.value)
     for result in session.execute_graph(v_query):
+        pprint(result.value)
+
+Converting a traversal to a bytecode query for core graphs require some more work, because we
+need the cluster context for UDT and tuple types:
+
+.. code-block:: python
+    context = {
+        'cluster': cluster,
+        'graph_name': 'the_graph_for_the_query'
+    }
+    addV_query = DseGraph.query_from_traversal(
+        g.addV('genre').property('genreId', 1).property('name', 'Action'),
+        graph_protocol=GraphProtocol.GRAPHSON_3_0,
+        context=context
+    )
+
+    for result in session.execute_graph(addV_query):
         pprint(result.value)
 
 Implicit Graph Traversal Execution with TinkerPop
@@ -149,11 +196,10 @@ python `Future <https://docs.python.org/3/library/concurrent.futures.html#concur
     # do other stuff...
 
 Specify the Execution Profile explicitly
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you don't want to change the default graph execution profile (`EXEC_PROFILE_GRAPH_DEFAULT`), you can register a new
 one as usual and use it explicitly. Here is an example:
-
 
 .. code-block:: python
 
@@ -161,7 +207,7 @@ one as usual and use it explicitly. Here is an example:
     from cassandra.datastax.graph.fluent import DseGraph
 
     cluster = Cluster()
-    ep = DseGraph.create_execution_profile('graph_name')
+    ep = DseGraph.create_execution_profile('graph_name', graph_protocol=GraphProtocol.GRAPHSON_3_0)
     cluster.add_execution_profile('graph_traversal', ep)
     session = cluster.connect()
 
@@ -177,26 +223,28 @@ the same execution profile (for different graphs):
     g_movies = DseGraph.traversal_source(session, graph_name='movies', ep)
     g_series = DseGraph.traversal_source(session, graph_name='series', ep)
 
-    print g_movies.V().toList()  # Traverse the movies Graph
-    print g_series.V().toList()  # Traverse the series Graph
+    print(g_movies.V().toList())  # Traverse the movies Graph
+    print(g_series.V().toList())  # Traverse the series Graph
 
 Batch Queries
 ~~~~~~~~~~~~~
 
 DSE Graph supports batch queries using a :class:`TraversalBatch <.datastax.graph.fluent.query.TraversalBatch>` object
 instantiated with :meth:`DseGraph.batch <.datastax.graph.fluent.DseGraph.batch>`. A :class:`TraversalBatch <.datastax.graph.fluent.query.TraversalBatch>` allows
-you to execute multiple graph traversals in a single atomic transaction. A 
-traversal batch is executed with :meth:`.Session.execute_graph` or using 
-:meth:`TraversalBatch.execute <.datastax.graph.fluent.query.TraversalBatch.execute>` if bounded to a DSE session. 
+you to execute multiple graph traversals in a single atomic transaction. A
+traversal batch is executed with :meth:`.Session.execute_graph` or using
+:meth:`TraversalBatch.execute <.datastax.graph.fluent.query.TraversalBatch.execute>` if bounded to a DSE session.
 
-Either way you choose to execute the traversal batch, you need to configure 
+Either way you choose to execute the traversal batch, you need to configure
 the execution profile accordingly. Here is a example::
 
     from cassandra.cluster import Cluster
     from cassandra.datastax.graph.fluent import DseGraph
 
-    ep = DseGraph.create_execution_profile('graph_name')
-    cluster = Cluster(execution_profiles={'graphson2': ep})
+    ep = DseGraph.create_execution_profile(
+        'graph_name',
+        graph_protocol=GraphProtocol.GRAPHSON_3_0)
+    cluster = Cluster(execution_profiles={'graphson3': ep})
     session = cluster.connect()
 
     g = DseGraph.traversal_source()
@@ -211,13 +259,13 @@ the batch to a GraphStatement::
     batch.add(
         g.addV('genre').property('genreId', 2).property('name', 'Drama'))  # Don't use `.next()` with a batch
 
-    graph_statement = batch.as_graph_statement()
+    graph_statement = batch.as_graph_statement(graph_protocol=GraphProtocol.GRAPHSON_3_0)
     graph_statement.is_idempotent = True  # configure any Statement parameters if needed...
-    session.execute_graph(graph_statement, execution_profile='graphson2')
+    session.execute_graph(graph_statement, execution_profile='graphson3')
 
 To execute the batch using :meth:`TraversalBatch.execute <.datastax.graph.fluent.query.TraversalBatch.execute>`, you need to bound the batch to a DSE session::
 
-    batch = DseGraph.batch(session, 'graphson2')  # bound the session and execution profile
+    batch = DseGraph.batch(session, 'graphson3')  # bound the session and execution profile
 
     batch.add(
         g.addV('genre').property('genreId', 1).property('name', 'Action'))

@@ -13,16 +13,15 @@
 # limitations under the License.
 
 
-from tests.integration import use_singledc, PROTOCOL_VERSION
+from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, CASSANDRA_VERSION
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
+
+from packaging.version import Version
+
 from cassandra import InvalidRequest, DriverException
 
 from cassandra import ConsistencyLevel, ProtocolVersion
-from cassandra.cluster import Cluster
 from cassandra.query import PreparedStatement, UNSET_VALUE
 from tests.integration import (get_server_versions, greaterthanorequalcass40, greaterthanorequaldse50,
     requirecassandra, BasicSharedKeyspaceUnitTestCase)
@@ -44,8 +43,7 @@ class PreparedStatementTests(unittest.TestCase):
         cls.cass_version = get_server_versions()
 
     def setUp(self):
-        self.cluster = Cluster(metrics_enabled=True, protocol_version=PROTOCOL_VERSION,
-                               allow_beta_protocol_version=True)
+        self.cluster = TestCluster(metrics_enabled=True, allow_beta_protocol_version=True)
         self.session = self.cluster.connect()
 
     def tearDown(self):
@@ -397,6 +395,9 @@ class PreparedStatementTests(unittest.TestCase):
         with self.assertRaises(InvalidRequest):
             self.session.execute(prepared, [0])
 
+    @unittest.skipIf((CASSANDRA_VERSION >= Version('3.11.12') and CASSANDRA_VERSION < Version('4.0')) or \
+        CASSANDRA_VERSION >= Version('4.0.2'),
+        "Fixed server-side in Cassandra 3.11.12, 4.0.2")
     def test_fail_if_different_query_id_on_reprepare(self):
         """ PYTHON-1124 and CASSANDRA-15252 """
         keyspace = "test_fail_if_different_query_id_on_reprepare"
@@ -517,7 +518,7 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         @since 3.12
         @jira_ticket PYTHON-808
         """
-        one_cluster = Cluster(metrics_enabled=True, protocol_version=PROTOCOL_VERSION)
+        one_cluster = TestCluster(metrics_enabled=True)
         one_session = one_cluster.connect()
         self.addCleanup(one_cluster.shutdown)
 
@@ -557,7 +558,7 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         @since 3.13
         @jira_ticket PYTHON-847
         """
-        cluster = Cluster(protocol_version=ProtocolVersion.V4)
+        cluster = TestCluster(protocol_version=ProtocolVersion.V4)
         session = cluster.connect()
         self.addCleanup(cluster.shutdown)
         self._test_updated_conditional(session, 9)
@@ -571,7 +572,7 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         @since 3.13
         @jira_ticket PYTHON-847
         """
-        cluster = Cluster(protocol_version=ProtocolVersion.V5)
+        cluster = TestCluster(protocol_version=ProtocolVersion.V5)
         session = cluster.connect()
         self.addCleanup(cluster.shutdown)
         self._test_updated_conditional(session, 10)
@@ -586,7 +587,7 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         @since 3.13
         @jira_ticket PYTHON-847
         """
-        cluster = Cluster(protocol_version=ProtocolVersion.DSE_V1)
+        cluster = TestCluster(protocol_version=ProtocolVersion.DSE_V1)
         session = cluster.connect()
         self.addCleanup(cluster.shutdown)
         self._test_updated_conditional(session, 10)
@@ -601,7 +602,7 @@ class PreparedStatementInvalidationTest(BasicSharedKeyspaceUnitTestCase):
         @since 3.13
         @jira_ticket PYTHON-847
         """
-        cluster = Cluster(protocol_version=ProtocolVersion.DSE_V2)
+        cluster = TestCluster(protocol_version=ProtocolVersion.DSE_V2)
         session = cluster.connect()
         self.addCleanup(cluster.shutdown)
         self._test_updated_conditional(session, 10)

@@ -12,20 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from packaging.version import Version
 import logging
 import time
 
-from cassandra.cluster import Cluster, NoHostAvailable
+from cassandra.cluster import NoHostAvailable
 from cassandra.auth import PlainTextAuthProvider, SASLClient, SaslAuthProvider
 
-from tests.integration import use_singledc, get_cluster, remove_cluster, PROTOCOL_VERSION, CASSANDRA_IP, \
-    set_default_cass_ip, USE_CASS_EXTERNAL, start_cluster_wait_for_up
+from tests.integration import use_singledc, get_cluster, remove_cluster, PROTOCOL_VERSION, \
+    CASSANDRA_IP, CASSANDRA_VERSION, USE_CASS_EXTERNAL, start_cluster_wait_for_up, TestCluster
 from tests.integration.util import assert_quiescent_pool_state
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest
+import unittest
 
 log = logging.getLogger(__name__)
 
@@ -44,15 +42,20 @@ def setup_module():
         ccm_cluster.set_configuration_options(config_options)
         log.debug("Starting ccm test cluster with %s", config_options)
         start_cluster_wait_for_up(ccm_cluster)
-    else:
-        set_default_cass_ip()
 
+    # PYTHON-1328
+    #
+    # Give the cluster enough time to startup (and perform necessary initialization)
+    # before executing the test.
+    if CASSANDRA_VERSION > Version('4.0-a'):
+        time.sleep(10)
 
 def teardown_module():
     remove_cluster()  # this test messes with config
 
 
 class AuthenticationTests(unittest.TestCase):
+
     """
     Tests to cover basic authentication functionality
     """
@@ -77,14 +80,12 @@ class AuthenticationTests(unittest.TestCase):
         # to ensure the role manager is setup
         for _ in range(5):
             try:
-                cluster = Cluster(
-                    protocol_version=PROTOCOL_VERSION,
+                cluster = TestCluster(
                     idle_heartbeat_interval=0,
                     auth_provider=self.get_authentication_provider(username='cassandra', password='cassandra'))
                 cluster.connect(wait_for_all_pools=True)
 
-                return Cluster(
-                    protocol_version=PROTOCOL_VERSION,
+                return TestCluster(
                     idle_heartbeat_interval=0,
                     auth_provider=self.get_authentication_provider(username=usr, password=pwd))
             except Exception as e:
@@ -93,6 +94,7 @@ class AuthenticationTests(unittest.TestCase):
         raise Exception('Unable to connect with creds: {}/{}'.format(usr, pwd))
 
     def test_auth_connect(self):
+
         user = 'u'
         passwd = 'password'
 
@@ -119,7 +121,7 @@ class AuthenticationTests(unittest.TestCase):
     def test_connect_wrong_pwd(self):
         cluster = self.cluster_as('cassandra', 'wrong_pass')
         try:
-            self.assertRaisesRegexp(NoHostAvailable,
+            self.assertRaisesRegex(NoHostAvailable,
                                     '.*AuthenticationFailed.',
                                     cluster.connect)
             assert_quiescent_pool_state(self, cluster)
@@ -129,7 +131,7 @@ class AuthenticationTests(unittest.TestCase):
     def test_connect_wrong_username(self):
         cluster = self.cluster_as('wrong_user', 'cassandra')
         try:
-            self.assertRaisesRegexp(NoHostAvailable,
+            self.assertRaisesRegex(NoHostAvailable,
                                     '.*AuthenticationFailed.*',
                                     cluster.connect)
             assert_quiescent_pool_state(self, cluster)
@@ -139,7 +141,7 @@ class AuthenticationTests(unittest.TestCase):
     def test_connect_empty_pwd(self):
         cluster = self.cluster_as('Cassandra', '')
         try:
-            self.assertRaisesRegexp(NoHostAvailable,
+            self.assertRaisesRegex(NoHostAvailable,
                                     '.*AuthenticationFailed.*',
                                     cluster.connect)
             assert_quiescent_pool_state(self, cluster)
@@ -147,9 +149,9 @@ class AuthenticationTests(unittest.TestCase):
             cluster.shutdown()
 
     def test_connect_no_auth_provider(self):
-        cluster = Cluster(protocol_version=PROTOCOL_VERSION)
+        cluster = TestCluster()
         try:
-            self.assertRaisesRegexp(NoHostAvailable,
+            self.assertRaisesRegex(NoHostAvailable,
                                     '.*AuthenticationFailed.*',
                                     cluster.connect)
             assert_quiescent_pool_state(self, cluster)

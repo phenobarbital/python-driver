@@ -12,22 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from collections import namedtuple
 from functools import partial
-import six
 
 from cassandra import InvalidRequest
-from cassandra.cluster import Cluster, UserTypeDoesNotExist, ExecutionProfile, EXEC_PROFILE_DEFAULT
+from cassandra.cluster import UserTypeDoesNotExist, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.query import dict_factory
 from cassandra.util import OrderedMap
 
-from tests.integration import use_singledc, PROTOCOL_VERSION, execute_until_pass, \
-    BasicSegregatedKeyspaceUnitTestCase, greaterthancass20, lessthancass30, greaterthanorequalcass36
+from tests.integration import use_singledc, execute_until_pass, \
+    BasicSegregatedKeyspaceUnitTestCase, greaterthancass20, lessthancass30, greaterthanorequalcass36, TestCluster
 from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES, PRIMITIVE_DATATYPES_KEYS, \
     COLLECTION_TYPES, get_sample, get_collection_sample
 
@@ -79,7 +75,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test the insertion of unprepared, registered UDTs
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
         s.execute("CREATE TYPE user (age int, name text)")
@@ -123,7 +119,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test the registration of UDTs before session creation
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(wait_for_all_pools=True)
 
         s.execute("""
@@ -144,7 +140,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
 
         # now that types are defined, shutdown and re-create Cluster
         c.shutdown()
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
 
         User1 = namedtuple('user', ('age', 'name'))
         User2 = namedtuple('user', ('state', 'is_cool'))
@@ -181,7 +177,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test the insertion of prepared, unregistered UDTs
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
         s.execute("CREATE TYPE user (age int, name text)")
@@ -225,7 +221,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test the insertion of prepared, registered UDTs
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
         s.execute("CREATE TYPE user (age int, name text)")
@@ -275,7 +271,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test the insertion of UDTs with null and empty string fields
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
         s.execute("CREATE TYPE user (a text, b int, c uuid, d blob)")
@@ -294,9 +290,9 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         self.assertEqual((None, None, None, None), s.execute(select)[0].b)
 
         # also test empty strings
-        s.execute(insert, [User('', None, None, six.binary_type())])
+        s.execute(insert, [User('', None, None, bytes())])
         results = s.execute("SELECT b FROM mytable WHERE a=0")
-        self.assertEqual(('', None, None, six.binary_type()), results[0].b)
+        self.assertEqual(('', None, None, bytes()), results[0].b)
 
         c.shutdown()
 
@@ -305,7 +301,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test for ensuring extra-lengthy udts are properly inserted
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
         max_test_length = 254
@@ -385,8 +381,9 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
             self.assertEqual(udt, result["v_{0}".format(i)])
 
     def _cluster_default_dict_factory(self):
-        return Cluster(protocol_version=PROTOCOL_VERSION,
-                       execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)})
+        return TestCluster(
+            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=dict_factory)}
+        )
 
     def test_can_insert_nested_registered_udts(self):
         """
@@ -485,7 +482,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test for ensuring that an error is raised for operating on a nonexisting udt or an invalid keyspace
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
         User = namedtuple('user', ('age', 'name'))
 
@@ -505,7 +502,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test for inserting various types of PRIMITIVE_DATATYPES into UDT's
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
         # create UDT
@@ -550,7 +547,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         Test for inserting various types of COLLECTION_TYPES into UDT's
         """
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
 
         # create UDT
@@ -617,7 +614,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         if self.cass_version < (2, 1, 3):
             raise unittest.SkipTest("Support for nested collections was introduced in Cassandra 2.1.3")
 
-        c = Cluster(protocol_version=PROTOCOL_VERSION)
+        c = TestCluster()
         s = c.connect(self.keyspace_name, wait_for_all_pools=True)
         s.encoder.mapping[tuple] = s.encoder.cql_encode_tuple
 
@@ -720,7 +717,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         s.execute("INSERT INTO %s (k, v) VALUES (0, {v0 : 3, v1 : 0xdeadbeef})" % (self.table_name,))
         val = s.execute('SELECT v FROM %s' % self.table_name)[0][0]
         self.assertEqual(val['v0'], 3)
-        self.assertEqual(val['v1'], six.b('\xde\xad\xbe\xef'))
+        self.assertEqual(val['v1'], b'\xde\xad\xbe\xef')
 
     @lessthancass30
     def test_alter_udt(self):

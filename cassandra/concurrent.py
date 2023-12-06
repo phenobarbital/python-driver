@@ -16,12 +16,10 @@
 from collections import namedtuple
 from heapq import heappush, heappop
 from itertools import cycle
-import six
-from six.moves import xrange, zip
 from threading import Condition
 import sys
 
-from cassandra.cluster import ResultSet
+from cassandra.cluster import ResultSet, EXEC_PROFILE_DEFAULT
 
 import logging
 log = logging.getLogger(__name__)
@@ -29,7 +27,7 @@ log = logging.getLogger(__name__)
 
 ExecutionResult = namedtuple('ExecutionResult', ['success', 'result_or_exc'])
 
-def execute_concurrent(session, statements_and_parameters, concurrency=100, raise_on_first_error=True, results_generator=False):
+def execute_concurrent(session, statements_and_parameters, concurrency=100, raise_on_first_error=True, results_generator=False, execution_profile=EXEC_PROFILE_DEFAULT):
     """
     Executes a sequence of (statement, parameters) tuples concurrently.  Each
     ``parameters`` item must be a sequence or :const:`None`.
@@ -55,6 +53,9 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
       as they return instead of materializing the entire list at once. The trade for lower memory
       footprint is marginal CPU overhead (more thread coordination and sorting out-of-order results
       on-the-fly).
+
+    `execution_profile` argument is the execution profile to use for this
+    request, it is passed directly to :meth:`Session.execute_async`.
 
     A sequence of ``ExecutionResult(success, result_or_exc)`` namedtuples is returned
     in the same order that the statements were passed in.  If ``success`` is :const:`False`,
@@ -90,7 +91,8 @@ def execute_concurrent(session, statements_and_parameters, concurrency=100, rais
     if not statements_and_parameters:
         return []
 
-    executor = ConcurrentExecutorGenResults(session, statements_and_parameters) if results_generator else ConcurrentExecutorListResults(session, statements_and_parameters)
+    executor = ConcurrentExecutorGenResults(session, statements_and_parameters, execution_profile) \
+        if results_generator else ConcurrentExecutorListResults(session, statements_and_parameters, execution_profile)
     return executor.execute(concurrency, raise_on_first_error)
 
 
@@ -98,9 +100,10 @@ class _ConcurrentExecutor(object):
 
     max_error_recursion = 100
 
-    def __init__(self, session, statements_and_params):
+    def __init__(self, session, statements_and_params, execution_profile):
         self.session = session
         self._enum_statements = enumerate(iter(statements_and_params))
+        self._execution_profile = execution_profile
         self._condition = Condition()
         self._fail_fast = False
         self._results_queue = []
@@ -114,7 +117,7 @@ class _ConcurrentExecutor(object):
         self._current = 0
         self._exec_count = 0
         with self._condition:
-            for n in xrange(concurrency):
+            for n in range(concurrency):
                 if not self._execute_next():
                     break
         return self._results()
@@ -132,23 +135,19 @@ class _ConcurrentExecutor(object):
     def _execute(self, idx, statement, params):
         self._exec_depth += 1
         try:
-            future = self.session.execute_async(statement, params, timeout=None)
+            future = self.session.execute_async(statement, params, timeout=None, execution_profile=self._execution_profile)
             args = (future, idx)
             future.add_callbacks(
                 callback=self._on_success, callback_args=args,
                 errback=self._on_error, errback_args=args)
         except Exception as exc:
-            # exc_info with fail_fast to preserve stack trace info when raising on the client thread
-            # (matches previous behavior -- not sure why we wouldn't want stack trace in the other case)
-            e = sys.exc_info() if self._fail_fast and six.PY2 else exc
-
             # If we're not failing fast and all executions are raising, there is a chance of recursing
             # here as subsequent requests are attempted. If we hit this threshold, schedule this result/retry
             # and let the event loop thread return.
             if self._exec_depth < self.max_error_recursion:
-                self._put_result(e, idx, False)
+                self._put_result(exc, idx, False)
             else:
-                self.session.submit(self._put_result, e, idx, False)
+                self.session.submit(self._put_result, exc, idx, False)
         self._exec_depth -= 1
 
     def _on_success(self, result, future, idx):
@@ -157,14 +156,6 @@ class _ConcurrentExecutor(object):
 
     def _on_error(self, result, future, idx):
         self._put_result(result, idx, False)
-
-    @staticmethod
-    def _raise(exc):
-        if six.PY2 and isinstance(exc, tuple):
-            (exc_type, value, traceback) = exc
-            six.reraise(exc_type, value, traceback)
-        else:
-            raise exc
 
 
 class ConcurrentExecutorGenResults(_ConcurrentExecutor):
@@ -185,7 +176,7 @@ class ConcurrentExecutorGenResults(_ConcurrentExecutor):
                     try:
                         self._condition.release()
                         if self._fail_fast and not res[0]:
-                            self._raise(res[1])
+                            raise res[1]
                         yield res
                     finally:
                         self._condition.acquire()
@@ -216,9 +207,9 @@ class ConcurrentExecutorListResults(_ConcurrentExecutor):
             while self._current < self._exec_count:
                 self._condition.wait()
                 if self._exception and self._fail_fast:
-                    self._raise(self._exception)
+                    raise self._exception
         if self._exception and self._fail_fast:  # raise the exception even if there was no wait
-            self._raise(self._exception)
+            raise self._exception
         return [r[1] for r in sorted(self._results_queue)]
 
 

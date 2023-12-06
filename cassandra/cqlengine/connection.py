@@ -14,7 +14,6 @@
 
 from collections import defaultdict
 import logging
-import six
 import threading
 
 from cassandra.cluster import Cluster, _ConfigMode, _NOT_SET, NoHostAvailable, UserTypeDoesNotExist, ConsistencyLevel
@@ -98,7 +97,13 @@ class Connection(object):
         if self.lazy_connect:
             return
 
-        self.cluster = Cluster(self.hosts, **self.cluster_options)
+        if 'cloud' in self.cluster_options:
+            if self.hosts:
+                log.warning("Ignoring hosts %s because a cloud config was provided.", self.hosts)
+            self.cluster = Cluster(**self.cluster_options)
+        else:
+            self.cluster = Cluster(self.hosts, **self.cluster_options)
+
         try:
             self.session = self.cluster.connect()
             log.debug(format_log_context("connection initialized with internally created session", connection=self.name))
@@ -301,6 +306,8 @@ def set_session(s):
     log.debug("cqlengine default connection initialized with %s", s)
 
 
+# TODO next major: if a cloud config is specified in kwargs, hosts will be ignored.
+# This function should be refactored to reflect this change. PYTHON-1265
 def setup(
         hosts,
         default_keyspace,
@@ -338,7 +345,7 @@ def execute(query, params=None, consistency_level=None, timeout=NOT_SET, connect
     elif isinstance(query, BaseCQLStatement):
         params = query.get_context()
         query = SimpleStatement(str(query), consistency_level=consistency_level, fetch_size=query.fetch_size)
-    elif isinstance(query, six.string_types):
+    elif isinstance(query, str):
         query = SimpleStatement(query, consistency_level=consistency_level)
     log.debug(format_log_context('Query: {}, Params: {}'.format(query.query_string, params), connection=connection))
 

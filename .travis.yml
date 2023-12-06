@@ -3,12 +3,8 @@ sudo: false
 
 language: python
 python:
-  - "2.7"
-  - "3.5"
-  - "3.6"
   - "3.7"
-  - "pypy2.7-6.0"
-  - "pypy3.5"
+  - "3.8"
 
 env:
   - CASS_DRIVER_NO_CYTHON=1
@@ -24,7 +20,9 @@ addons:
     - libev-dev
 
 install:
-  - pip install tox-travis lz4
+  - pip install --upgrade setuptools importlib-metadata
+  - pip install tox-travis
+  - if [[ $TRAVIS_PYTHON_VERSION != pypy3.5 ]]; then pip install lz4; fi
 
 script:
   - tox

@@ -13,17 +13,17 @@
 # limitations under the License
 from cassandra.datastax.cloud import parse_metadata_info
 from cassandra.query import SimpleStatement
+from cassandra.cqlengine import connection
+from cassandra.cqlengine.management import sync_table, create_keyspace_simple
+from cassandra.cqlengine.models import Model
+from cassandra.cqlengine import columns
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
-import six
-from ssl import SSLContext, PROTOCOL_TLSv1
+from ssl import SSLContext, PROTOCOL_TLS
 
 from cassandra import DriverException, ConsistencyLevel, InvalidRequest
-from cassandra.cluster import NoHostAvailable, ExecutionProfile, Cluster
+from cassandra.cluster import NoHostAvailable, ExecutionProfile, Cluster, _execution_profile_to_string
 from cassandra.connection import SniEndPoint
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.policies import TokenAwarePolicy, DCAwareRoundRobinPolicy, ConstantReconnectionPolicy
@@ -88,7 +88,7 @@ class CloudTests(CloudProxyCluster):
 
     def test_error_overriding_ssl_context(self):
         with self.assertRaises(ValueError) as cm:
-            self.connect(self.creds, ssl_context=SSLContext(PROTOCOL_TLSv1))
+            self.connect(self.creds, ssl_context=SSLContext(PROTOCOL_TLS))
 
         self.assertIn('cannot be specified with a cloud configuration', str(cm.exception))
 
@@ -113,10 +113,7 @@ class CloudTests(CloudProxyCluster):
         try:
             self.connect('/invalid/path/file.zip')
         except Exception as e:
-            if six.PY2:
-                self.assertIsInstance(e, IOError)
-            else:
-                self.assertIsInstance(e, FileNotFoundError)
+            self.assertIsInstance(e, FileNotFoundError)
 
     def test_load_balancing_policy_is_dcawaretokenlbp(self):
         self.connect(self.creds)
@@ -143,7 +140,7 @@ class CloudTests(CloudProxyCluster):
             wait_until_not_raised(
                 lambda: self.assertEqual(len(self.hosts_up()), 3),
                 0.02, 250)
-            mocked_resolve.assert_called_once()
+            mocked_resolve.assert_called()
 
     def test_metadata_unreachable(self):
         with self.assertRaises(DriverException) as cm:
@@ -160,7 +157,16 @@ class CloudTests(CloudProxyCluster):
     def test_default_consistency(self):
         self.connect(self.creds)
         self.assertEqual(self.session.default_consistency_level, ConsistencyLevel.LOCAL_QUORUM)
-        self.assertEqual(self.cluster.profile_manager.default.consistency_level, ConsistencyLevel.LOCAL_QUORUM)
+        # Verify EXEC_PROFILE_DEFAULT, EXEC_PROFILE_GRAPH_DEFAULT,
+        # EXEC_PROFILE_GRAPH_SYSTEM_DEFAULT, EXEC_PROFILE_GRAPH_ANALYTICS_DEFAULT
+        for ep_key in self.cluster.profile_manager.profiles.keys():
+            ep = self.cluster.profile_manager.profiles[ep_key]
+            self.assertEqual(
+                ep.consistency_level,
+                ConsistencyLevel.LOCAL_QUORUM,
+                "Expecting LOCAL QUORUM for profile {}, but got {} instead".format(
+                _execution_profile_to_string(ep_key), ConsistencyLevel.value_to_name[ep.consistency_level]
+                ))
 
     def test_default_consistency_of_execution_profiles(self):
         cloud_config = {'secure_connect_bundle': self.creds}
@@ -225,3 +231,14 @@ class CloudTests(CloudProxyCluster):
             self.session.execute(statement)
         except InvalidRequest:
             self.fail("InvalidRequest was incorrectly raised for write query at LOCAL QUORUM!")
+
+    def test_cqlengine_can_connect(self):
+        class TestModel(Model):
+            id = columns.Integer(primary_key=True)
+            val = columns.Text()
+
+        connection.setup(None, "test", cloud={'secure_connect_bundle': self.creds})
+        create_keyspace_simple('test', 1)
+        sync_table(TestModel)
+        TestModel.objects.create(id=42, value='test')
+        self.assertEqual(len(TestModel.objects.all()), 1)

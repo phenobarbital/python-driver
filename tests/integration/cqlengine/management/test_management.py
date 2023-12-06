@@ -11,10 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 import mock
 import logging
@@ -264,7 +261,7 @@ class TablePropertiesTests(BaseCassEngTestCase):
         option = 'no way will this ever be an option'
         try:
             ModelWithTableProperties.__options__[option] = 'what was I thinking?'
-            self.assertRaisesRegexp(KeyError, "Invalid table option.*%s.*" % option, sync_table, ModelWithTableProperties)
+            self.assertRaisesRegex(KeyError, "Invalid table option.*%s.*" % option, sync_table, ModelWithTableProperties)
         finally:
             ModelWithTableProperties.__options__.pop(option, None)
 

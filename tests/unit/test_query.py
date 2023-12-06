@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
-
-import six
+import unittest
 
 from cassandra.query import BatchStatement, SimpleStatement
 
@@ -28,7 +23,7 @@ class BatchStatementTest(unittest.TestCase):
     def test_clear(self):
         keyspace = 'keyspace'
         routing_key = 'routing_key'
-        custom_payload = {'key': six.b('value')}
+        custom_payload = {'key': b'value'}
 
         ss = SimpleStatement('whatever', keyspace=keyspace, routing_key=routing_key, custom_payload=custom_payload)
 

@@ -4,7 +4,7 @@ A Python client driver for `Apache Cassandra® <http://cassandra.apache.org>`_.
 This driver works exclusively with the Cassandra Query Language v3 (CQL3)
 and Cassandra's native protocol.  Cassandra 2.1+ is supported, including DSE 4.7+.
 
-The driver supports Python 2.7, 3.4, 3.5, 3.6, 3.7 and 3.8.
+The driver supports Python 3.7 and 3.8.
 
 This driver is open source under the
 `Apache v2 License <http://www.apache.org/licenses/LICENSE-2.0.html>`_.
@@ -48,13 +48,19 @@ Contents
     Some discussion on the driver's approach to working with timestamp, date, time types
 
 :doc:`cloud`
-    A guide to connecting to Datastax Apollo
+    A guide to connecting to Datastax Astra
+
+:doc:`column_encryption`
+    Transparent client-side per-column encryption and decryption
 
 :doc:`geo_types`
     Working with DSE geometry types
 
 :doc:`graph`
-    Graph queries
+    Graph queries with the Core engine
+
+:doc:`classic_graph`
+    Graph queries with the Classic engine
 
 :doc:`graph_fluent`
     DataStax Graph Fluent API

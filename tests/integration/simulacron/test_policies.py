@@ -11,10 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 from cassandra import OperationTimedOut, WriteTimeout
 from cassandra.cluster import Cluster, ExecutionProfile, ResponseFuture, EXEC_PROFILE_DEFAULT, NoHostAvailable
@@ -184,7 +181,7 @@ class SpecExecTest(unittest.TestCase):
         spec = ExecutionProfile(load_balancing_policy=RoundRobinPolicy(),
                                 speculative_execution_policy=ConstantSpeculativeExecutionPolicy(0, number_of_requests))
 
-        cluster = Cluster(compression=False)
+        cluster = Cluster(protocol_version=PROTOCOL_VERSION, compression=False)
         cluster.add_execution_profile("spec", spec)
         session = cluster.connect(wait_for_all_pools=True)
         self.addCleanup(cluster.shutdown)

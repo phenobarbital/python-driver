@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest # noqa
+import unittest
+
+from collections import deque
+from threading import RLock
 
 from mock import Mock, MagicMock, ANY
 
@@ -159,7 +159,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         # Simulate ResponseFuture timing out
         rf._on_timeout()
-        self.assertRaisesRegexp(OperationTimedOut, "Connection defunct by heartbeat", rf.result)
+        self.assertRaisesRegex(OperationTimedOut, "Connection defunct by heartbeat", rf.result)
 
     def test_read_timeout_error_message(self):
         session = self.make_session()
@@ -604,3 +604,29 @@ class ResponseFutureTests(unittest.TestCase):
         rf._query = Mock(return_value=True)
         rf._execute_after_prepare('host', None, None, response)
         rf._query.assert_called_once_with('host')
+
+    def test_timeout_does_not_release_stream_id(self):
+        """
+        Make sure that stream ID is not reused immediately after client-side
+        timeout. Otherwise, a new request could reuse the stream ID and would
+        risk getting a response for the old, timed out query.
+        """
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [Mock(endpoint='ip1'), Mock(endpoint='ip2')]
+        pool = self.make_pool()
+        session._pools.get.return_value = pool
+        connection = Mock(spec=Connection, lock=RLock(), _requests={}, request_ids=deque(),
+                orphaned_request_ids=set(), orphaned_threshold=256)
+        pool.borrow_connection.return_value = (connection, 1)
+
+        rf = self.make_response_future(session)
+        rf.send_request()
+
+        connection._requests[1] = (connection._handle_options_response, ProtocolHandler.decode_message, [])
+
+        rf._on_timeout()
+        pool.return_connection.assert_called_once_with(connection, stream_was_orphaned=True)
+        self.assertRaisesRegexp(OperationTimedOut, "Client request timeout", rf.result)
+
+        assert len(connection.request_ids) == 0, \
+            "Request IDs should be empty but it's not: {}".format(connection.request_ids)

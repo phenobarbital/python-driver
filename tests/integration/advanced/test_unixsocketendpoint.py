@@ -11,21 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License
-try:
-    import unittest2 as unittest
-except ImportError:
-    import unittest  # noqa
+import unittest
 
 import time
 import subprocess
 import logging
 
-from cassandra.cluster import Cluster, ExecutionProfile, EXEC_PROFILE_DEFAULT
+from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy, RoundRobinPolicy
 
 from tests import notwindows
-from tests.integration import use_single_node
+from tests.integration import use_single_node, TestCluster
 
 log = logging.getLogger()
 log.setLevel('DEBUG')
@@ -65,7 +62,7 @@ class UnixSocketTest(unittest.TestCase):
         lbp = UnixSocketWhiteListRoundRobinPolicy([UNIX_SOCKET_PATH])
         ep = ExecutionProfile(load_balancing_policy=lbp)
         endpoint = UnixSocketEndPoint(UNIX_SOCKET_PATH)
-        cls.cluster = Cluster([endpoint], execution_profiles={EXEC_PROFILE_DEFAULT: ep})
+        cls.cluster = TestCluster(contact_points=[endpoint], execution_profiles={EXEC_PROFILE_DEFAULT: ep})
 
     @classmethod
     def tearDownClass(cls):
